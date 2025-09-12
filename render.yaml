@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: sports-betting-beta
+    env: python
+    buildCommand: "pip install fastapi uvicorn psutil"
+    startCommand: "uvicorn beta_platform:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sports-betting-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ODDS_API_KEY
+        value: "demo_key_for_testing"
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+databases:
+  - name: sports-betting-db
+    plan: free
+    databaseName: sportsbetting
+    user: sportsbetting
