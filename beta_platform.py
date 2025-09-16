@@ -365,30 +365,37 @@ def get_cached_odds(sport: str = "americanfootball_nfl") -> List[Dict]:
     # Check cache
     if cache_key in odds_cache:
         if datetime.now() - cache_timestamp[cache_key] < timedelta(minutes=30):
+            print(f"Using cached data for {sport}")
             return odds_cache[cache_key]
     
-    # Try API
-    if ODDS_API_KEY and ODDS_API_KEY != 'demo-key':
-        try:
-            response = requests.get(
-                f"{ODDS_API_BASE}/sports/{sport}/odds",
-                params={
-                    'apiKey': ODDS_API_KEY,
-                    'regions': 'us',
-                    'markets': 'h2h,spreads,totals',
-                    'bookmakers': 'draftkings,fanduel,betmgm,caesars'
-                },
-                timeout=10
-            )
-            if response.status_code == 200:
-                data = response.json()
-                odds_cache[cache_key] = data
-                cache_timestamp[cache_key] = datetime.now()
-                return data
-        except Exception as e:
-            print(f"API error: {e}")
+    # Always try API first with your real key
+    print(f"Fetching live odds for {sport}...")
+    try:
+        response = requests.get(
+            f"{ODDS_API_BASE}/sports/{sport}/odds",
+            params={
+                'apiKey': ODDS_API_KEY,
+                'regions': 'us',
+                'markets': 'h2h,spreads,totals'
+                # Don't limit bookmakers - get all available
+            },
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            print(f"✅ Got {len(data)} real {sport} games from API")
+            print(f"   API calls remaining: {response.headers.get('x-requests-remaining', 'N/A')}")
+            odds_cache[cache_key] = data
+            cache_timestamp[cache_key] = datetime.now()
+            return data
+        else:
+            print(f"❌ API error {response.status_code}: {response.text}")
+    except Exception as e:
+        print(f"❌ Connection error: {e}")
     
-    # Return mock data
+    # Only use mock data if API completely fails
+    print("⚠️ Using mock data as fallback")
     return generate_mock_odds(sport)
 
 def generate_mock_odds(sport: str) -> List[Dict]:
@@ -542,7 +549,8 @@ def get_dashboard_html(user: str, sport: str = "NFL") -> str:
     elite_bets = []
     arbitrage_opportunities = []
     
-    for game in games[:20]:  # Analyze up to 20 games
+    # Analyze all available games (no limit needed with real data)
+    for game in games:
         analysis = analyze_game_with_ml(game, sport)
         recommendation = BettingRecommendation.generate_recommendation(game, analysis)
         
