@@ -19,6 +19,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 import uvicorn
+import threading
+import time
 
 # Add project root to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -50,9 +52,19 @@ users_db = {}
 sessions = {}
 user_bets = {}
 user_performance = {}
-odds_cache = {}
-cache_timestamp = {}
 bet_history = []
+
+# Server-side cache (shared by ALL users)
+SERVER_ODDS_CACHE = {
+    "nfl": {"data": [], "last_updated": None},
+    "nba": {"data": [], "last_updated": None},
+    "mlb": {"data": [], "last_updated": None},
+    "ncaaf": {"data": [], "last_updated": None}
+}
+
+# Cache settings
+CACHE_UPDATE_INTERVAL = 30  # minutes
+LAST_API_CALL = None
 
 # Initialize ML models if available
 if ML_MODELS_AVAILABLE:
@@ -359,44 +371,31 @@ def analyze_game_with_ml(game_data: Dict, sport: str = "NFL") -> Dict:
     return analysis
 
 def get_cached_odds(sport: str = "americanfootball_nfl") -> List[Dict]:
-    """Get odds with caching"""
-    cache_key = f"odds_{sport}"
+    """Get odds from SERVER cache - NO API calls made by users"""
     
-    # Check cache
-    if cache_key in odds_cache:
-        if datetime.now() - cache_timestamp[cache_key] < timedelta(minutes=30):
-            print(f"Using cached data for {sport}")
-            return odds_cache[cache_key]
+    # Map API sport names to our cache keys
+    sport_map = {
+        "americanfootball_nfl": "nfl",
+        "basketball_nba": "nba",
+        "baseball_mlb": "mlb",
+        "americanfootball_ncaaf": "ncaaf"
+    }
     
-    # Always try API first with your real key
-    print(f"Fetching live odds for {sport}...")
-    try:
-        response = requests.get(
-            f"{ODDS_API_BASE}/sports/{sport}/odds",
-            params={
-                'apiKey': ODDS_API_KEY,
-                'regions': 'us',
-                'markets': 'h2h,spreads,totals'
-                # Don't limit bookmakers - get all available
-            },
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            print(f"✅ Got {len(data)} real {sport} games from API")
-            print(f"   API calls remaining: {response.headers.get('x-requests-remaining', 'N/A')}")
-            odds_cache[cache_key] = data
-            cache_timestamp[cache_key] = datetime.now()
-            return data
-        else:
-            print(f"❌ API error {response.status_code}: {response.text}")
-    except Exception as e:
-        print(f"❌ Connection error: {e}")
+    cache_key = sport_map.get(sport, "nfl")
+    cache = SERVER_ODDS_CACHE.get(cache_key, {})
     
-    # Only use mock data if API completely fails
-    print("⚠️ Using mock data as fallback")
-    return generate_mock_odds(sport)
+    # Return server's cached data - users NEVER call API
+    data = cache.get("data", [])
+    
+    if data:
+        age = (datetime.now() - cache["last_updated"]).total_seconds() / 60 if cache.get("last_updated") else 999
+        print(f"[USER] Serving {len(data)} cached {cache_key} games (age: {age:.1f} min)")
+    else:
+        print(f"[USER] No cached {cache_key} data yet - server is fetching...")
+        # Return empty list while waiting for server to fetch
+        return []
+    
+    return data
 
 def generate_mock_odds(sport: str) -> List[Dict]:
     """Generate realistic mock odds"""
@@ -1396,23 +1395,76 @@ async def get_user_performance(request: Request):
     username = sessions[session_id]
     return user_performance.get(username, {})
 
+@app.on_event("startup")
+async def startup_event():
+    """Initialize server cache on startup"""
+    print("[SERVER] Initializing server-side cache...")
+    
+    # Start background thread for automatic updates
+    def update_cache_loop():
+        while True:
+            print(f"\n[SERVER] Auto-updating cache at {datetime.now()}")
+            
+            sport_mapping = {
+                "nfl": "americanfootball_nfl",
+                "nba": "basketball_nba",
+                "mlb": "baseball_mlb",
+                "ncaaf": "americanfootball_ncaaf"
+            }
+            
+            for sport, api_key in sport_mapping.items():
+                try:
+                    # Server fetches data (not users!)
+                    response = requests.get(
+                        f"{ODDS_API_BASE}/sports/{api_key}/odds",
+                        params={'apiKey': ODDS_API_KEY, 'regions': 'us', 'markets': 'h2h,spreads,totals'},
+                        timeout=10
+                    )
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        SERVER_ODDS_CACHE[sport] = {
+                            "data": data,
+                            "last_updated": datetime.now()
+                        }
+                        print(f"[SERVER] ✅ Updated {sport}: {len(data)} games")
+                    
+                    time.sleep(2)  # Be nice to API
+                    
+                except Exception as e:
+                    print(f"[SERVER] Error updating {sport}: {e}")
+            
+            print(f"[SERVER] Next update in {CACHE_UPDATE_INTERVAL} minutes")
+            time.sleep(CACHE_UPDATE_INTERVAL * 60)
+    
+    # Start background thread
+    cache_thread = threading.Thread(target=update_cache_loop, daemon=True)
+    cache_thread.start()
+    
+    print("[SERVER] Cache updater started!")
+
+@app.get("/api/cache-status")
+async def cache_status():
+    """Check server cache status"""
+    status = {}
+    for sport, cache in SERVER_ODDS_CACHE.items():
+        status[sport] = {
+            "games": len(cache.get("data", [])),
+            "last_updated": cache.get("last_updated").isoformat() if cache.get("last_updated") else None
+        }
+    return JSONResponse(content=status)
+
 if __name__ == "__main__":
     print("=" * 60)
-    print("SMART BETTING PLATFORM - ML ENHANCED")
+    print("SPORTS BETTING BETA - SERVER CACHED")
     print("=" * 60)
-    print(f"ML Models: {'✅ Active' if ML_MODELS_AVAILABLE else '⚠️ Simplified Mode'}")
-    print(f"Odds API: {'✅ Live Data' if ODDS_API_KEY != 'demo-key' else '📊 Demo Mode'}")
-    print(f"Google Analytics: ✅ {GOOGLE_ANALYTICS_ID}")
+    print(f"✅ Server fetches odds every {CACHE_UPDATE_INTERVAL} min")
+    print(f"✅ Users see cached data - 0 API calls per visit")
+    print(f"✅ Can handle unlimited users!")
+    print(f"ML Models: {'✅ Active' if ML_MODELS_AVAILABLE else '⚠️ Simplified'}")
     print("=" * 60)
-    print("Features:")
-    print("- Clear betting recommendations with specific picks")
-    print("- ML model integration for predictions")
-    print("- Multi-sport support (NFL, NBA, MLB, NCAAF)")
-    print("- Real-time arbitrage detection")
-    print("- Performance tracking and ROI metrics")
-    print("- Bet history and tracking")
-    print("=" * 60)
-    print("Starting server at http://localhost:8000")
+    print("Starting at http://localhost:8000")
+    print("Cache status: http://localhost:8000/api/cache-status")
     print("=" * 60)
     
     uvicorn.run(app, host="0.0.0.0", port=8000)
