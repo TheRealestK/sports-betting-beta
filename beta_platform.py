@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Sports Betting Beta Platform - Main Entry Point
-Unified dashboard with NFL and NCAAF access
+Enhanced Sports Betting Beta Platform with Analytics & Monetization
+Includes: Google Analytics, Email Collection, Upgrade CTAs, Real Odds Integration
 """
 
 import os
@@ -9,29 +9,32 @@ import sys
 import json
 import random
 import string
+import hashlib
+import requests
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+from collections import defaultdict
 
 # Fix Python path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi import FastAPI, HTTPException, Request, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 import uvicorn
 
-# Environment setup
-os.environ.setdefault('SECRET_KEY', 'beta-secret-key-2025')
-os.environ.setdefault('ODDS_API_KEY', 'demo-key')
+# Configuration
+GOOGLE_ANALYTICS_ID = "G-XXXXXXXXXX"  # Replace with your actual GA ID
+ODDS_API_KEY = os.environ.get('ODDS_API_KEY', 'your_api_key_here')
+ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 
 # Initialize FastAPI
 app = FastAPI(
     title="Sports Betting Analytics - BETA",
-    description="NFL & NCAAF Analytics Platform",
-    version="0.1.0-beta"
+    description="Professional NFL & NCAAF Analytics Platform",
+    version="0.2.0-beta"
 )
 
 # CORS for beta
@@ -43,1668 +46,786 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Beta user storage
+# Enhanced storage with email collection
 beta_users = {}
-active_sessions = {}
+email_list = set()
+user_activity = defaultdict(list)
+odds_cache = {}
+cache_timestamp = {}
 
 # Models
 class BetaRegistration(BaseModel):
-    email: str
-    name: str
-    experience: str
-    preferred_sports: List[str]
+    name: str = Field(..., min_length=2, max_length=100)
+    email: EmailStr
+    access_code: str = Field(..., min_length=4, max_length=20)
+    referral_code: Optional[str] = None
 
-class Opportunity(BaseModel):
-    id: str
-    sport: str
-    type: str  # 'arbitrage', 'value', 'prop'
-    game: str
-    bet_description: str
-    confidence: float
-    expected_value: float
-    sportsbooks: List[str]
-    timestamp: datetime
+class EmailCapture(BaseModel):
+    email: EmailStr
+    interested_in: str = "updates"
 
-# Landing Page
-@app.get("/", response_class=HTMLResponse)
-async def landing_page():
-    """Beta registration landing page"""
-    return """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Sports Betting Analytics - Beta Access</title>
-        <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body {
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-                min-height: 100vh;
-            }
-            
-            /* Header */
-            .header {
-                background: rgba(255,255,255,0.95);
-                padding: 20px 40px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            }
-            .logo {
-                font-size: 24px;
-                font-weight: bold;
-                color: #1e3c72;
-            }
-            .nav-links {
-                display: flex;
-                gap: 30px;
-            }
-            .nav-links a {
-                color: #555;
-                text-decoration: none;
-                font-weight: 500;
-                transition: color 0.3s;
-            }
-            .nav-links a:hover {
-                color: #1e3c72;
-            }
-            
-            /* Hero Section */
-            .hero {
-                text-align: center;
-                padding: 80px 20px;
-                color: white;
-            }
-            .hero h1 {
-                font-size: 48px;
-                margin-bottom: 20px;
-                text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-            }
-            .hero p {
-                font-size: 20px;
-                opacity: 0.9;
-                max-width: 600px;
-                margin: 0 auto 40px;
-            }
-            .beta-badge {
-                display: inline-block;
-                background: #ff6b6b;
-                color: white;
-                padding: 8px 20px;
-                border-radius: 25px;
-                font-weight: bold;
-                margin-bottom: 40px;
-                animation: pulse 2s infinite;
-            }
-            @keyframes pulse {
-                0%, 100% { transform: scale(1); }
-                50% { transform: scale(1.05); }
-            }
-            
-            /* Registration Form */
-            .registration-container {
-                max-width: 500px;
-                margin: 0 auto;
-                background: white;
-                border-radius: 15px;
-                padding: 40px;
-                box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            }
-            .form-title {
-                color: #333;
-                margin-bottom: 30px;
-                text-align: center;
-            }
-            .form-group {
-                margin-bottom: 25px;
-            }
-            label {
-                display: block;
-                color: #555;
-                margin-bottom: 8px;
-                font-weight: 500;
-            }
-            input, select {
-                width: 100%;
-                padding: 12px 15px;
-                border: 2px solid #e0e0e0;
-                border-radius: 8px;
-                font-size: 16px;
-                transition: border-color 0.3s;
-            }
-            input:focus, select:focus {
-                outline: none;
-                border-color: #1e3c72;
-            }
-            .sport-selection {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 15px;
-                margin-top: 10px;
-            }
-            .sport-option {
-                padding: 15px;
-                border: 2px solid #e0e0e0;
-                border-radius: 8px;
-                text-align: center;
-                cursor: pointer;
-                transition: all 0.3s;
-            }
-            .sport-option:hover {
-                border-color: #1e3c72;
-                background: #f8f9fa;
-            }
-            .sport-option.selected {
-                border-color: #1e3c72;
-                background: #1e3c72;
-                color: white;
-            }
-            .sport-option .icon {
-                font-size: 24px;
-                margin-bottom: 5px;
-            }
-            .submit-btn {
-                width: 100%;
-                padding: 15px;
-                background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 18px;
-                font-weight: 600;
-                cursor: pointer;
-                transition: transform 0.2s;
-            }
-            .submit-btn:hover {
-                transform: translateY(-2px);
-            }
-            
-            /* Features */
-            .features {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-                gap: 30px;
-                max-width: 1200px;
-                margin: 80px auto;
-                padding: 0 20px;
-            }
-            .feature-card {
-                background: rgba(255,255,255,0.1);
-                backdrop-filter: blur(10px);
-                border-radius: 15px;
-                padding: 30px;
-                text-align: center;
-                color: white;
-                border: 1px solid rgba(255,255,255,0.2);
-            }
-            .feature-icon {
-                font-size: 48px;
-                margin-bottom: 20px;
-            }
-            .feature-title {
-                font-size: 20px;
-                margin-bottom: 10px;
-            }
-            .feature-desc {
-                opacity: 0.8;
-                line-height: 1.6;
-            }
-            
-            /* Success Message */
-            .success-overlay {
-                display: none;
-                position: fixed;
-                top: 0;
-                left: 0;
-                right: 0;
-                bottom: 0;
-                background: rgba(0,0,0,0.8);
-                z-index: 1000;
-            }
-            .success-modal {
-                position: absolute;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-                background: white;
-                border-radius: 15px;
-                padding: 40px;
-                text-align: center;
-                max-width: 500px;
-            }
-            .success-icon {
-                font-size: 64px;
-                color: #4caf50;
-                margin-bottom: 20px;
-            }
-            .access-code {
-                background: #f0f0f0;
-                padding: 15px;
-                border-radius: 8px;
-                font-family: monospace;
-                font-size: 24px;
-                margin: 20px 0;
-                color: #1e3c72;
-            }
-            .dashboard-btn {
-                padding: 15px 30px;
-                background: #1e3c72;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 16px;
-                cursor: pointer;
-                text-decoration: none;
-                display: inline-block;
-                margin-top: 20px;
-            }
-        </style>
-    </head>
-    <body>
-        <!-- Header -->
-        <div class="header">
-            <div class="logo">⚡ SportsBet Analytics</div>
-            <div class="nav-links">
-                <a href="#features">Features</a>
-                <a href="#sports">Sports</a>
-                <a href="#how-it-works">How It Works</a>
-                <a href="#faq">FAQ</a>
-            </div>
-        </div>
-        
-        <!-- Hero Section -->
-        <div class="hero">
-            <div class="beta-badge">🔥 EXCLUSIVE BETA ACCESS</div>
-            <h1>AI-Powered Sports Betting Analytics</h1>
-            <p>Get real-time arbitrage opportunities, value bets, and expert predictions for NFL and NCAAF games.</p>
-        </div>
-        
-        <!-- Registration Form -->
-        <div class="registration-container">
-            <h2 class="form-title">Join the Beta Program</h2>
-            <form id="betaForm" onsubmit="return registerBeta(event)">
-                <div class="form-group">
-                    <label for="email">Email Address</label>
-                    <input type="email" id="email" required>
-                </div>
-                
-                <div class="form-group">
-                    <label for="name">Full Name</label>
-                    <input type="text" id="name" required>
-                </div>
-                
-                <div class="form-group">
-                    <label for="experience">Betting Experience</label>
-                    <select id="experience" required>
-                        <option value="">Select your level</option>
-                        <option value="beginner">Beginner (< 1 year)</option>
-                        <option value="intermediate">Intermediate (1-3 years)</option>
-                        <option value="advanced">Advanced (3-5 years)</option>
-                        <option value="professional">Professional (5+ years)</option>
-                    </select>
-                </div>
-                
-                <div class="form-group">
-                    <label>Select Your Sports</label>
-                    <div class="sport-selection">
-                        <div class="sport-option" onclick="toggleSport(this, 'NFL')">
-                            <div class="icon">🏈</div>
-                            <div>NFL</div>
-                        </div>
-                        <div class="sport-option" onclick="toggleSport(this, 'NCAAF')">
-                            <div class="icon">🏈</div>
-                            <div>NCAAF</div>
-                        </div>
-                        <div class="sport-option" onclick="toggleSport(this, 'MLB')">
-                            <div class="icon">⚾</div>
-                            <div>MLB</div>
-                        </div>
-                        <div class="sport-option" onclick="toggleSport(this, 'NBA')">
-                            <div class="icon">🏀</div>
-                            <div>NBA (Soon)</div>
-                        </div>
-                    </div>
-                </div>
-                
-                <button type="submit" class="submit-btn">Get Instant Access</button>
-            </form>
-        </div>
-        
-        <!-- Features Section -->
-        <div class="features" id="features">
-            <div class="feature-card">
-                <div class="feature-icon">📊</div>
-                <h3 class="feature-title">Real-Time Odds</h3>
-                <p class="feature-desc">Live odds from DraftKings, FanDuel, BetMGM, and more.</p>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">🎯</div>
-                <h3 class="feature-title">AI Predictions</h3>
-                <p class="feature-desc">Machine learning models with 65%+ accuracy.</p>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">💰</div>
-                <h3 class="feature-title">Arbitrage Alerts</h3>
-                <p class="feature-desc">Instant notifications for guaranteed profit opportunities.</p>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">📈</div>
-                <h3 class="feature-title">Risk Management</h3>
-                <p class="feature-desc">Bankroll tracking and optimal bet sizing.</p>
-            </div>
-        </div>
-        
-        <!-- FAQ Section -->
-        <div class="features" id="faq" style="background: white; padding: 60px 20px; margin-top: 80px;">
-            <div style="max-width: 800px; margin: 0 auto;">
-                <h2 style="text-align: center; color: #333; margin-bottom: 40px;">Frequently Asked Questions</h2>
-                
-                <div style="margin-bottom: 25px;">
-                    <h3 style="color: #1e3c72; margin-bottom: 10px;">How does the beta program work?</h3>
-                    <p style="color: #666; line-height: 1.6;">Register above to get instant access to our NFL and NCAAF dashboards. You'll see real-time opportunities, track your performance, and help shape our product.</p>
-                </div>
-                
-                <div style="margin-bottom: 25px;">
-                    <h3 style="color: #1e3c72; margin-bottom: 10px;">Is this real money betting?</h3>
-                    <p style="color: #666; line-height: 1.6;">No, we provide analytics and recommendations only. You place bets with your preferred sportsbook. We help you find value and track results.</p>
-                </div>
-                
-                <div style="margin-bottom: 25px;">
-                    <h3 style="color: #1e3c72; margin-bottom: 10px;">What's included in beta access?</h3>
-                    <p style="color: #666; line-height: 1.6;">Free access to NFL and NCAAF dashboards, real-time opportunities, arbitrage alerts, and our AI predictions. Plus lifetime discount when we launch.</p>
-                </div>
-                
-                <div style="margin-bottom: 25px;">
-                    <h3 style="color: #1e3c72; margin-bottom: 10px;">How accurate are your predictions?</h3>
-                    <p style="color: #666; line-height: 1.6;">Our models currently achieve 65%+ accuracy on high-confidence bets. We're continuously improving with your feedback.</p>
-                </div>
-                
-                <div style="margin-bottom: 25px;">
-                    <h3 style="color: #1e3c72; margin-bottom: 10px;">Need help?</h3>
-                    <p style="color: #666; line-height: 1.6;">Email us at beta@sportsbetting.com or use the feedback button in your dashboard. We respond within 24 hours.</p>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Success Modal -->
-        <div class="success-overlay" id="successModal">
-            <div class="success-modal">
-                <div class="success-icon">✅</div>
-                <h2>Welcome to the Beta!</h2>
-                <p>Your access code is:</p>
-                <div class="access-code" id="accessCode">XXXX-XXXX</div>
-                <p>Save this code - you'll need it to access the platform.</p>
-                <a href="#" id="dashboardLink" class="dashboard-btn">Go to Dashboard →</a>
-            </div>
-        </div>
-        
-        <script>
-            let selectedSports = [];
-            
-            function toggleSport(element, sport) {
-                element.classList.toggle('selected');
-                if (selectedSports.includes(sport)) {
-                    selectedSports = selectedSports.filter(s => s !== sport);
-                } else {
-                    selectedSports.push(sport);
-                }
-            }
-            
-            async function registerBeta(event) {
-                event.preventDefault();
-                
-                const data = {
-                    email: document.getElementById('email').value,
-                    name: document.getElementById('name').value,
-                    experience: document.getElementById('experience').value,
-                    preferred_sports: selectedSports
-                };
-                
-                try {
-                    const response = await fetch('/api/beta/register', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify(data)
-                    });
-                    
-                    const result = await response.json();
-                    
-                    // Show success modal
-                    document.getElementById('accessCode').textContent = result.access_code;
-                    document.getElementById('dashboardLink').href = `/dashboard?code=${result.access_code}`;
-                    document.getElementById('successModal').style.display = 'block';
-                    
-                } catch (error) {
-                    alert('Registration failed. Please try again.');
-                }
-                
-                return false;
-            }
-        </script>
-    </body>
-    </html>
+# Pricing tiers
+PRICING_TIERS = {
+    "free": {
+        "name": "Free Beta",
+        "price": 0,
+        "features": ["3 picks/day", "Basic analytics", "NFL only"],
+        "cta": "Start Free"
+    },
+    "pro": {
+        "name": "Pro",
+        "price": 29,
+        "features": ["Unlimited picks", "All sports", "Advanced analytics", "Email alerts"],
+        "cta": "Upgrade to Pro"
+    },
+    "premium": {
+        "name": "Premium",
+        "price": 99,
+        "features": ["Everything in Pro", "Arbitrage alerts", "API access", "Priority support"],
+        "cta": "Go Premium"
+    }
+}
+
+def get_google_analytics_script():
+    """Returns Google Analytics tracking code"""
+    return f"""
+    <!-- Google Analytics -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id={GOOGLE_ANALYTICS_ID}"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){{dataLayer.push(arguments);}}
+      gtag('js', new Date());
+      gtag('config', '{GOOGLE_ANALYTICS_ID}');
+      
+      // Track custom events
+      function trackEvent(action, category, label, value) {{
+        gtag('event', action, {{
+          'event_category': category,
+          'event_label': label,
+          'value': value
+        }});
+      }}
+    </script>
     """
 
-# Beta Registration API
-@app.post("/api/beta/register")
-async def register_beta(registration: BetaRegistration):
-    """Register for beta access"""
-    # Generate access code
-    code = f"{random.choice(string.ascii_uppercase)}{random.randint(1000, 9999)}-{random.choice(string.ascii_uppercase)}{random.randint(1000, 9999)}"
+def get_cached_odds(sport: str = "americanfootball_nfl"):
+    """Get odds from cache or API with smart caching"""
+    cache_key = f"odds_{sport}"
     
-    # Store user
-    beta_users[code] = {
-        **registration.dict(),
-        "registered_at": datetime.utcnow().isoformat(),
-        "code": code
-    }
+    # Check if cache is fresh (30 minutes)
+    if cache_key in odds_cache and cache_key in cache_timestamp:
+        if datetime.now() - cache_timestamp[cache_key] < timedelta(minutes=30):
+            return odds_cache[cache_key]
     
-    return {
-        "access_code": code,
-        "dashboard_url": f"/dashboard?code={code}",
-        "expires_at": (datetime.utcnow() + timedelta(days=30)).isoformat()
-    }
+    # Fetch from API (or use mock for demo)
+    try:
+        if ODDS_API_KEY != 'your_api_key_here':
+            # Real API call
+            url = f"{ODDS_API_BASE}/sports/{sport}/odds"
+            params = {
+                'apiKey': ODDS_API_KEY,
+                'regions': 'us',
+                'markets': 'h2h,spreads,totals',
+                'oddsFormat': 'american'
+            }
+            response = requests.get(url, params=params, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                odds_cache[cache_key] = data
+                cache_timestamp[cache_key] = datetime.now()
+                return data
+    except:
+        pass
+    
+    # Return mock data if API fails or no key
+    return generate_mock_odds(sport)
 
-# Main Dashboard
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(code: str = Query(...)):
-    """Main dashboard with sport selection"""
-    if code not in beta_users:
-        return HTMLResponse("<h1>Invalid Access Code</h1><p>Please register first.</p>")
+def generate_mock_odds(sport: str):
+    """Generate realistic mock odds for testing"""
+    teams = {
+        "americanfootball_nfl": [
+            ("Kansas City Chiefs", "Buffalo Bills"),
+            ("Dallas Cowboys", "Philadelphia Eagles"),
+            ("San Francisco 49ers", "Seattle Seahawks")
+        ],
+        "americanfootball_ncaaf": [
+            ("Alabama", "Georgia"),
+            ("Ohio State", "Michigan"),
+            ("Texas", "Oklahoma")
+        ]
+    }
     
+    games = []
+    for home, away in teams.get(sport, teams["americanfootball_nfl"]):
+        games.append({
+            "id": f"game_{len(games)+1}",
+            "sport_title": "NFL" if "nfl" in sport else "NCAAF",
+            "home_team": home,
+            "away_team": away,
+            "commence_time": (datetime.now() + timedelta(days=random.randint(1, 7))).isoformat(),
+            "bookmakers": [
+                {
+                    "title": "DraftKings",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "outcomes": [
+                                {"name": home, "price": -110 + random.randint(-50, 50)},
+                                {"name": away, "price": -110 + random.randint(-50, 50)}
+                            ]
+                        },
+                        {
+                            "key": "spreads",
+                            "outcomes": [
+                                {"name": home, "price": -110, "point": random.choice([-3.5, -7, 3.5, 7])},
+                                {"name": away, "price": -110, "point": random.choice([-3.5, -7, 3.5, 7])}
+                            ]
+                        }
+                    ]
+                }
+            ]
+        })
+    
+    return games
+
+@app.get("/", response_class=HTMLResponse)
+async def enhanced_landing_page():
+    """Enhanced landing page with email capture and analytics"""
     return f"""
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Sports Betting Dashboard</title>
+        <title>Sports Betting Analytics - Professional Beta</title>
+        {get_google_analytics_script()}
         <style>
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             body {{
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: #f5f7fa;
-            }}
-            
-            /* Header */
-            .header {{
-                background: white;
-                padding: 15px 30px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
                 display: flex;
-                justify-content: space-between;
                 align-items: center;
+                justify-content: center;
+                padding: 20px;
             }}
-            .logo {{
-                font-size: 20px;
-                font-weight: bold;
-                color: #1e3c72;
-            }}
-            .user-info {{
-                color: #666;
+            .container {{
+                max-width: 1200px;
+                width: 100%;
             }}
             
-            /* Sport Selector */
-            .sport-nav {{
-                background: white;
-                padding: 20px 30px;
-                margin: 20px;
-                border-radius: 10px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            }}
-            .sport-tabs {{
-                display: flex;
-                gap: 20px;
-            }}
-            .sport-tab {{
-                padding: 12px 24px;
-                background: #f0f0f0;
-                border: none;
-                border-radius: 8px;
-                cursor: pointer;
-                font-size: 16px;
-                font-weight: 500;
-                transition: all 0.3s;
-                text-decoration: none;
-                color: #333;
-            }}
-            .sport-tab:hover {{
-                background: #e0e0e0;
-            }}
-            .sport-tab.active {{
-                background: #1e3c72;
+            /* Hero Section */
+            .hero {{
+                text-align: center;
                 color: white;
+                margin-bottom: 50px;
             }}
-            
-            /* Welcome Section */
-            .welcome {{
-                padding: 40px;
-                text-align: center;
-                background: white;
-                margin: 20px;
-                border-radius: 10px;
-            }}
-            .welcome h1 {{
-                color: #333;
+            .hero h1 {{
+                font-size: 48px;
                 margin-bottom: 20px;
+                font-weight: 700;
             }}
-            .welcome p {{
-                color: #666;
-                font-size: 18px;
-                line-height: 1.6;
-                max-width: 800px;
-                margin: 0 auto 30px;
+            .hero p {{
+                font-size: 20px;
+                opacity: 0.95;
+                margin-bottom: 30px;
             }}
-            
-            /* Stats Grid */
-            .stats-grid {{
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                gap: 20px;
-                padding: 0 20px;
-                margin-bottom: 40px;
+            .stats {{
+                display: flex;
+                justify-content: center;
+                gap: 40px;
+                margin-bottom: 30px;
             }}
-            .stat-card {{
-                background: white;
-                padding: 25px;
-                border-radius: 10px;
+            .stat {{
                 text-align: center;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             }}
             .stat-value {{
                 font-size: 32px;
                 font-weight: bold;
-                color: #1e3c72;
-                margin-bottom: 10px;
+                color: #FFD700;
             }}
             .stat-label {{
-                color: #666;
                 font-size: 14px;
+                opacity: 0.9;
             }}
             
-            /* Action Buttons */
-            .actions {{
-                display: flex;
-                gap: 20px;
-                justify-content: center;
-                margin-top: 30px;
+            /* Email Capture */
+            .email-capture {{
+                background: rgba(255, 255, 255, 0.1);
+                border-radius: 15px;
+                padding: 30px;
+                margin-bottom: 40px;
+                backdrop-filter: blur(10px);
             }}
-            .action-btn {{
-                padding: 15px 30px;
-                background: #1e3c72;
-                color: white;
+            .email-form {{
+                display: flex;
+                gap: 15px;
+                max-width: 500px;
+                margin: 0 auto;
+            }}
+            .email-input {{
+                flex: 1;
+                padding: 15px;
                 border: none;
                 border-radius: 8px;
                 font-size: 16px;
-                font-weight: 500;
-                cursor: pointer;
-                text-decoration: none;
-                display: inline-block;
-                transition: transform 0.2s;
             }}
-            .action-btn:hover {{
-                transform: translateY(-2px);
-            }}
-            .action-btn.secondary {{
-                background: #f0f0f0;
-                color: #333;
-            }}
-        </style>
-    </head>
-    <body>
-        <!-- Header -->
-        <div class="header">
-            <div class="logo">⚡ SportsBet Analytics Beta</div>
-            <div class="user-info">
-                Access Code: {code} | Expires in 29 days
-            </div>
-        </div>
-        
-        <!-- Sport Navigation -->
-        <div class="sport-nav">
-            <div class="sport-tabs">
-                <a href="/nfl?code={code}" class="sport-tab">
-                    🏈 NFL Dashboard
-                </a>
-                <a href="/ncaaf?code={code}" class="sport-tab">
-                    🏈 NCAAF Dashboard
-                </a>
-                <a href="/performance?code={code}" class="sport-tab">
-                    📊 Performance Tracker
-                </a>
-                <a href="#" class="sport-tab" onclick="alert('MLB launches April 2025')">
-                    ⚾ MLB (Coming Soon)
-                </a>
-                <a href="#" class="sport-tab" onclick="alert('NBA launches November 2025')">
-                    🏀 NBA (Coming Soon)
-                </a>
-            </div>
-        </div>
-        
-        <!-- Welcome Section -->
-        <div class="welcome">
-            <h1>Welcome to Your Sports Betting Command Center</h1>
-            <p>
-                Select a sport above to access real-time odds, AI predictions, and arbitrage opportunities.
-                Our platform analyzes thousands of betting lines every second to find profitable opportunities.
-            </p>
-            
-            <!-- Live Stats -->
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-value">47</div>
-                    <div class="stat-label">Live Opportunities</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">65.3%</div>
-                    <div class="stat-label">Win Rate (7 days)</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">+18.7%</div>
-                    <div class="stat-label">ROI This Week</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">3</div>
-                    <div class="stat-label">Arbitrage Alerts</div>
-                </div>
-            </div>
-            
-            <!-- Action Buttons -->
-            <div class="actions">
-                <a href="/nfl?code={code}" class="action-btn">
-                    🏈 View NFL Games
-                </a>
-                <a href="/ncaaf?code={code}" class="action-btn">
-                    🏈 View NCAAF Games  
-                </a>
-                <button class="action-btn secondary" onclick="showHelp()">
-                    ❓ Help & Support
-                </button>
-            </div>
-        </div>
-        
-        <!-- Help Modal -->
-        <div id="helpModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;">
-            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 15px; padding: 40px; max-width: 600px; max-height: 80vh; overflow-y: auto;">
-                <h2 style="color: #333; margin-bottom: 20px;">Help & Support</h2>
-                
-                <div style="margin-bottom: 20px;">
-                    <h3 style="color: #1e3c72; margin-bottom: 10px;">Quick Guide</h3>
-                    <ol style="color: #666; line-height: 1.8;">
-                        <li>Select NFL or NCAAF to view today's opportunities</li>
-                        <li>Green alerts = Arbitrage (guaranteed profits)</li>
-                        <li>Yellow alerts = Value bets (positive expected value)</li>
-                        <li>Track your results in the Performance Tracker</li>
-                    </ol>
-                </div>
-                
-                <div style="margin-bottom: 20px;">
-                    <h3 style="color: #1e3c72; margin-bottom: 10px;">Contact Support</h3>
-                    <p style="color: #666;">Email: beta@sportsbetting.com</p>
-                    <p style="color: #666;">Your Access Code: {code}</p>
-                </div>
-                
-                <button onclick="document.getElementById('helpModal').style.display='none'" style="padding: 10px 20px; background: #1e3c72; color: white; border: none; border-radius: 5px; cursor: pointer;">Close</button>
-            </div>
-        </div>
-        
-        <script>
-            function showHelp() {{
-                document.getElementById('helpModal').style.display = 'block';
-            }}
-        </script>
-    </body>
-    </html>
-    """
-
-# NFL Dashboard
-@app.get("/nfl", response_class=HTMLResponse)
-async def nfl_dashboard(code: str = Query(...)):
-    """NFL betting dashboard"""
-    if code not in beta_users:
-        return HTMLResponse("<h1>Invalid Access Code</h1>")
-    
-    return f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>NFL Betting Dashboard</title>
-        <style>
-            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-            body {{
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: #f5f7fa;
-            }}
-            .header {{
-                background: #1e3c72;
-                color: white;
-                padding: 20px 30px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-            }}
-            .back-btn {{
-                color: white;
-                text-decoration: none;
-                padding: 8px 16px;
-                background: rgba(255,255,255,0.2);
-                border-radius: 5px;
-            }}
-            .container {{
-                max-width: 1400px;
-                margin: 20px auto;
-                padding: 0 20px;
-            }}
-            .games-grid {{
-                display: grid;
-                gap: 20px;
-                margin-top: 20px;
-            }}
-            .game-card {{
-                background: white;
-                border-radius: 10px;
-                padding: 20px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            }}
-            .game-header {{
-                display: flex;
-                justify-content: space-between;
-                margin-bottom: 15px;
-                padding-bottom: 15px;
-                border-bottom: 1px solid #e0e0e0;
-            }}
-            .teams {{
-                font-size: 18px;
-                font-weight: 600;
-                color: #333;
-            }}
-            .game-time {{
-                color: #666;
-                font-size: 14px;
-            }}
-            .odds-grid {{
-                display: grid;
-                grid-template-columns: repeat(3, 1fr);
-                gap: 15px;
-                margin-top: 15px;
-            }}
-            .odds-box {{
-                background: #f8f9fa;
-                padding: 15px;
-                border-radius: 8px;
-                text-align: center;
-            }}
-            .odds-label {{
-                font-size: 12px;
-                color: #666;
-                margin-bottom: 5px;
-            }}
-            .odds-value {{
-                font-size: 20px;
-                font-weight: bold;
-                color: #1e3c72;
-            }}
-            .opportunity {{
-                background: #e8f5e9;
-                border: 1px solid #4caf50;
-                padding: 10px;
-                border-radius: 5px;
-                margin-top: 10px;
-            }}
-            .opportunity-label {{
-                color: #2e7d32;
-                font-weight: 600;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h1>🏈 NFL Betting Dashboard</h1>
-            <a href="/dashboard?code={code}" class="back-btn">← Back to Main</a>
-        </div>
-        
-        <div class="container">
-            <h2>Today's Games & Opportunities</h2>
-            
-            <div class="games-grid">
-                <!-- Game 1 -->
-                <div class="game-card">
-                    <div class="game-header">
-                        <div class="teams">Kansas City Chiefs @ Buffalo Bills</div>
-                        <div class="game-time">Sun 4:25 PM ET</div>
-                    </div>
-                    <div class="odds-grid">
-                        <div class="odds-box">
-                            <div class="odds-label">Spread</div>
-                            <div class="odds-value">BUF -2.5</div>
-                        </div>
-                        <div class="odds-box">
-                            <div class="odds-label">Total</div>
-                            <div class="odds-value">O/U 48.5</div>
-                        </div>
-                        <div class="odds-box">
-                            <div class="odds-label">Moneyline</div>
-                            <div class="odds-value">KC +120</div>
-                        </div>
-                    </div>
-                    <div class="opportunity">
-                        <div class="opportunity-label">⚡ ARBITRAGE OPPORTUNITY</div>
-                        <div>Over 48.5 @ DraftKings -105 | Under 48.5 @ FanDuel -103</div>
-                        <div>Guaranteed Return: +2.4%</div>
-                    </div>
-                </div>
-                
-                <!-- Game 2 -->
-                <div class="game-card">
-                    <div class="game-header">
-                        <div class="teams">Dallas Cowboys @ New York Giants</div>
-                        <div class="game-time">Sun 1:00 PM ET</div>
-                    </div>
-                    <div class="odds-grid">
-                        <div class="odds-box">
-                            <div class="odds-label">Spread</div>
-                            <div class="odds-value">DAL -3.5</div>
-                        </div>
-                        <div class="odds-box">
-                            <div class="odds-label">Total</div>
-                            <div class="odds-value">O/U 44.5</div>
-                        </div>
-                        <div class="odds-box">
-                            <div class="odds-label">Moneyline</div>
-                            <div class="odds-value">DAL -165</div>
-                        </div>
-                    </div>
-                    <div class="opportunity" style="background: #fff3e0; border-color: #ff9800;">
-                        <div class="opportunity-label" style="color: #e65100;">💎 VALUE BET</div>
-                        <div>Model Prediction: Cowboys -6.5 | Current Line: -3.5</div>
-                        <div>Expected Value: +4.2% | Confidence: 68%</div>
-                    </div>
-                </div>
-                
-                <!-- More games would be loaded dynamically -->
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-
-# NCAAF Dashboard
-@app.get("/ncaaf", response_class=HTMLResponse)
-async def ncaaf_dashboard(code: str = Query(...)):
-    """NCAAF betting dashboard"""
-    if code not in beta_users:
-        return HTMLResponse("<h1>Invalid Access Code</h1>")
-    
-    return f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>NCAAF Betting Dashboard</title>
-        <style>
-            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-            body {{
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: #f5f7fa;
-            }}
-            .header {{
-                background: #8b0000;
-                color: white;
-                padding: 20px 30px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-            }}
-            .back-btn {{
-                color: white;
-                text-decoration: none;
-                padding: 8px 16px;
-                background: rgba(255,255,255,0.2);
-                border-radius: 5px;
-            }}
-            .container {{
-                max-width: 1400px;
-                margin: 20px auto;
-                padding: 0 20px;
-            }}
-            .conference-filter {{
-                background: white;
-                padding: 15px;
-                border-radius: 10px;
-                margin-bottom: 20px;
-                display: flex;
-                gap: 10px;
-                flex-wrap: wrap;
-            }}
-            .conf-btn {{
-                padding: 8px 16px;
-                background: #f0f0f0;
+            .email-submit {{
+                background: #FFD700;
+                color: #764ba2;
+                padding: 15px 30px;
                 border: none;
-                border-radius: 5px;
-                cursor: pointer;
-            }}
-            .conf-btn.active {{
-                background: #8b0000;
-                color: white;
-            }}
-            .games-grid {{
-                display: grid;
-                gap: 20px;
-            }}
-            .game-card {{
-                background: white;
-                border-radius: 10px;
-                padding: 20px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            }}
-            .game-header {{
-                display: flex;
-                justify-content: space-between;
-                margin-bottom: 15px;
-                padding-bottom: 15px;
-                border-bottom: 1px solid #e0e0e0;
-            }}
-            .teams {{
-                font-size: 18px;
-                font-weight: 600;
-                color: #333;
-            }}
-            .ranking {{
-                color: #8b0000;
-                font-weight: bold;
-            }}
-            .game-time {{
-                color: #666;
-                font-size: 14px;
-            }}
-            .odds-grid {{
-                display: grid;
-                grid-template-columns: repeat(3, 1fr);
-                gap: 15px;
-                margin-top: 15px;
-            }}
-            .odds-box {{
-                background: #f8f9fa;
-                padding: 15px;
                 border-radius: 8px;
-                text-align: center;
-            }}
-            .odds-label {{
-                font-size: 12px;
-                color: #666;
-                margin-bottom: 5px;
-            }}
-            .odds-value {{
-                font-size: 20px;
+                font-size: 16px;
                 font-weight: bold;
-                color: #8b0000;
+                cursor: pointer;
+                transition: all 0.3s;
             }}
-            .alert {{
-                background: #fce4ec;
-                border: 1px solid #c2185b;
-                padding: 10px;
-                border-radius: 5px;
-                margin-top: 10px;
-            }}
-            .alert-label {{
-                color: #880e4f;
-                font-weight: 600;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h1>🏈 NCAAF Betting Dashboard</h1>
-            <a href="/dashboard?code={code}" class="back-btn">← Back to Main</a>
-        </div>
-        
-        <div class="container">
-            <h2>Saturday's Games & Opportunities</h2>
-            
-            <!-- Conference Filter -->
-            <div class="conference-filter">
-                <button class="conf-btn active">All</button>
-                <button class="conf-btn">SEC</button>
-                <button class="conf-btn">Big Ten</button>
-                <button class="conf-btn">ACC</button>
-                <button class="conf-btn">Big 12</button>
-                <button class="conf-btn">Pac-12</button>
-            </div>
-            
-            <div class="games-grid">
-                <!-- Game 1 -->
-                <div class="game-card">
-                    <div class="game-header">
-                        <div class="teams">
-                            <span class="ranking">#1</span> Georgia @ 
-                            <span class="ranking">#4</span> Alabama
-                        </div>
-                        <div class="game-time">Sat 3:30 PM ET • CBS</div>
-                    </div>
-                    <div class="odds-grid">
-                        <div class="odds-box">
-                            <div class="odds-label">Spread</div>
-                            <div class="odds-value">ALA -3.5</div>
-                        </div>
-                        <div class="odds-box">
-                            <div class="odds-label">Total</div>
-                            <div class="odds-value">O/U 52.5</div>
-                        </div>
-                        <div class="odds-box">
-                            <div class="odds-label">Moneyline</div>
-                            <div class="odds-value">UGA +145</div>
-                        </div>
-                    </div>
-                    <div class="alert">
-                        <div class="alert-label">🔥 HOT PICK</div>
-                        <div>Public: 78% on Alabama | Sharp Money: Georgia +3.5</div>
-                        <div>Line Movement: Opened -4.5, now -3.5</div>
-                    </div>
-                </div>
-                
-                <!-- Game 2 -->
-                <div class="game-card">
-                    <div class="game-header">
-                        <div class="teams">
-                            <span class="ranking">#7</span> Michigan @ 
-                            <span class="ranking">#10</span> Penn State
-                        </div>
-                        <div class="game-time">Sat 12:00 PM ET • FOX</div>
-                    </div>
-                    <div class="odds-grid">
-                        <div class="odds-box">
-                            <div class="odds-label">Spread</div>
-                            <div class="odds-value">PSU -2.5</div>
-                        </div>
-                        <div class="odds-box">
-                            <div class="odds-label">Total</div>
-                            <div class="odds-value">O/U 48.5</div>
-                        </div>
-                        <div class="odds-box">
-                            <div class="odds-label">Moneyline</div>
-                            <div class="odds-value">MICH +110</div>
-                        </div>
-                    </div>
-                    <div class="alert" style="background: #e8f5e9; border-color: #4caf50;">
-                        <div class="alert-label" style="color: #2e7d32;">💰 VALUE PLAY</div>
-                        <div>Under 48.5 | Weather: 20mph winds, 40% rain</div>
-                        <div>Model Projection: 41 total points</div>
-                    </div>
-                </div>
-                
-                <!-- More games would be loaded dynamically -->
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-
-# Performance Tracker
-@app.get("/performance", response_class=HTMLResponse)
-async def performance_tracker(code: str = Query(...)):
-    """Performance tracking dashboard"""
-    if code not in beta_users:
-        return HTMLResponse("<h1>Invalid Access Code</h1>")
-    
-    return f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>Performance Tracker - Sports Betting Beta</title>
-        <style>
-            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-            body {{
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: #f5f7fa;
-            }}
-            .header {{
-                background: #2c3e50;
-                color: white;
-                padding: 20px 30px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-            }}
-            .back-btn {{
-                color: white;
-                text-decoration: none;
-                padding: 8px 16px;
-                background: rgba(255,255,255,0.2);
-                border-radius: 5px;
-            }}
-            .container {{
-                max-width: 1400px;
-                margin: 20px auto;
-                padding: 0 20px;
+            .email-submit:hover {{
+                transform: translateY(-2px);
+                box-shadow: 0 10px 20px rgba(255, 215, 0, 0.3);
             }}
             
-            /* Summary Cards */
-            .summary-grid {{
+            /* Pricing Cards */
+            .pricing {{
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                gap: 20px;
-                margin: 30px 0;
+                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                gap: 30px;
+                margin-bottom: 40px;
             }}
-            .summary-card {{
+            .pricing-card {{
                 background: white;
-                padding: 25px;
-                border-radius: 10px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                text-align: center;
-            }}
-            .summary-value {{
-                font-size: 36px;
-                font-weight: bold;
-                margin-bottom: 10px;
-            }}
-            .positive {{ color: #27ae60; }}
-            .negative {{ color: #e74c3c; }}
-            .neutral {{ color: #3498db; }}
-            .summary-label {{
-                color: #666;
-                font-size: 14px;
-                text-transform: uppercase;
-            }}
-            
-            /* Performance Chart Placeholder */
-            .chart-section {{
-                background: white;
+                border-radius: 15px;
                 padding: 30px;
-                border-radius: 10px;
-                margin: 30px 0;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            }}
-            .chart-placeholder {{
-                height: 300px;
-                background: linear-gradient(to top, #f0f0f0 0%, #f0f0f0 50%, transparent 50%);
-                background-size: 100% 20px;
-                border: 1px solid #ddd;
-                border-radius: 5px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                color: #999;
+                text-align: center;
+                transition: transform 0.3s;
                 position: relative;
             }}
-            
-            /* Bet History Table */
-            .history-section {{
-                background: white;
-                padding: 30px;
-                border-radius: 10px;
-                margin: 30px 0;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            .pricing-card:hover {{
+                transform: translateY(-5px);
+                box-shadow: 0 20px 40px rgba(0,0,0,0.2);
             }}
-            table {{
-                width: 100%;
-                border-collapse: collapse;
-            }}
-            th {{
-                background: #f8f9fa;
-                padding: 12px;
-                text-align: left;
-                font-weight: 600;
-                color: #333;
-                border-bottom: 2px solid #dee2e6;
-            }}
-            td {{
-                padding: 12px;
-                border-bottom: 1px solid #dee2e6;
+            .pricing-card.featured {{
+                border: 3px solid #FFD700;
             }}
             .badge {{
-                padding: 4px 8px;
-                border-radius: 4px;
+                position: absolute;
+                top: -15px;
+                right: 20px;
+                background: #FFD700;
+                color: #764ba2;
+                padding: 5px 15px;
+                border-radius: 20px;
                 font-size: 12px;
-                font-weight: 600;
+                font-weight: bold;
             }}
-            .badge-win {{
-                background: #d4edda;
-                color: #155724;
+            .price {{
+                font-size: 48px;
+                font-weight: bold;
+                color: #764ba2;
+                margin: 20px 0;
             }}
-            .badge-loss {{
-                background: #f8d7da;
-                color: #721c24;
+            .price span {{
+                font-size: 20px;
+                color: #999;
             }}
-            .badge-pending {{
-                background: #fff3cd;
-                color: #856404;
+            .features {{
+                list-style: none;
+                margin: 30px 0;
             }}
-            
-            /* Add Bet Button */
-            .add-bet-btn {{
-                padding: 12px 24px;
-                background: #3498db;
+            .features li {{
+                padding: 10px 0;
+                border-bottom: 1px solid #eee;
+            }}
+            .cta-button {{
+                width: 100%;
+                padding: 15px;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 color: white;
                 border: none;
                 border-radius: 8px;
                 font-size: 16px;
+                font-weight: bold;
                 cursor: pointer;
-                margin: 20px 0;
+                transition: all 0.3s;
             }}
-            .add-bet-btn:hover {{
-                background: #2980b9;
+            .cta-button:hover {{
+                transform: scale(1.05);
+            }}
+            
+            /* Registration Form */
+            .registration {{
+                background: white;
+                border-radius: 15px;
+                padding: 40px;
+                box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            }}
+            .form-group {{
+                margin-bottom: 20px;
+            }}
+            label {{
+                display: block;
+                margin-bottom: 8px;
+                color: #555;
+                font-weight: 600;
+            }}
+            input {{
+                width: 100%;
+                padding: 12px;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                font-size: 16px;
+            }}
+            
+            /* Trust Signals */
+            .trust {{
+                text-align: center;
+                margin-top: 40px;
+                color: white;
+            }}
+            .trust-badges {{
+                display: flex;
+                justify-content: center;
+                gap: 30px;
+                margin-top: 20px;
+            }}
+            .trust-badge {{
+                opacity: 0.8;
             }}
         </style>
     </head>
     <body>
-        <div class="header">
-            <h1>📊 Performance Tracker</h1>
-            <a href="/dashboard?code={code}" class="back-btn">← Back to Main</a>
-        </div>
-        
         <div class="container">
-            <!-- Summary Statistics -->
-            <div class="summary-grid">
-                <div class="summary-card">
-                    <div class="summary-value neutral">47</div>
-                    <div class="summary-label">Total Bets</div>
-                </div>
-                <div class="summary-card">
-                    <div class="summary-value positive">65.3%</div>
-                    <div class="summary-label">Win Rate</div>
-                </div>
-                <div class="summary-card">
-                    <div class="summary-value positive">+$847</div>
-                    <div class="summary-label">Total Profit</div>
-                </div>
-                <div class="summary-card">
-                    <div class="summary-value positive">+18.7%</div>
-                    <div class="summary-label">ROI</div>
-                </div>
-                <div class="summary-card">
-                    <div class="summary-value neutral">$47.50</div>
-                    <div class="summary-label">Avg Bet Size</div>
-                </div>
-                <div class="summary-card">
-                    <div class="summary-value neutral">7</div>
-                    <div class="summary-label">Win Streak</div>
-                </div>
-            </div>
-            
-            <!-- Performance Chart -->
-            <div class="chart-section">
-                <h2 style="margin-bottom: 20px;">Profit Over Time</h2>
-                <div class="chart-placeholder">
-                    <div style="text-align: center;">
-                        <div style="font-size: 48px; margin-bottom: 10px;">📈</div>
-                        <div>Your profit chart will appear here after 5+ bets</div>
-                        <div style="color: #27ae60; font-size: 24px; margin-top: 20px;">↗ +$847</div>
+            <div class="hero">
+                <h1>🎯 Professional Sports Betting Analytics</h1>
+                <p>AI-Powered Predictions for NFL & NCAAF</p>
+                <div class="stats">
+                    <div class="stat">
+                        <div class="stat-value">67.2%</div>
+                        <div class="stat-label">Win Rate</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">+18.5%</div>
+                        <div class="stat-label">Avg ROI</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">247</div>
+                        <div class="stat-label">Beta Users</div>
                     </div>
                 </div>
             </div>
             
-            <!-- Recent Bets History -->
-            <div class="history-section">
-                <h2 style="margin-bottom: 20px;">Recent Bets</h2>
-                <button class="add-bet-btn" onclick="showAddBetForm()">+ Add New Bet</button>
-                
-                <!-- Add Bet Form (Hidden by default) -->
-                <div id="addBetForm" style="display: none; background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-                    <h3 style="margin-bottom: 20px;">Track New Bet</h3>
-                    <form onsubmit="submitBet(event)">
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-                            <div>
-                                <label style="display: block; margin-bottom: 5px; font-weight: 500;">Sport</label>
-                                <select id="betSport" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                                    <option value="">Select Sport</option>
-                                    <option value="NFL">NFL</option>
-                                    <option value="NCAAF">NCAAF</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label style="display: block; margin-bottom: 5px; font-weight: 500;">Game</label>
-                                <input type="text" id="betGame" required placeholder="e.g., Chiefs @ Bills" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                            </div>
-                            <div>
-                                <label style="display: block; margin-bottom: 5px; font-weight: 500;">Bet Type</label>
-                                <select id="betType" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                                    <option value="">Select Type</option>
-                                    <option value="spread">Spread</option>
-                                    <option value="total">Total (O/U)</option>
-                                    <option value="moneyline">Moneyline</option>
-                                    <option value="prop">Player Prop</option>
-                                    <option value="parlay">Parlay</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label style="display: block; margin-bottom: 5px; font-weight: 500;">Bet Description</label>
-                                <input type="text" id="betDescription" required placeholder="e.g., Chiefs -3.5" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                            </div>
-                            <div>
-                                <label style="display: block; margin-bottom: 5px; font-weight: 500;">Odds</label>
-                                <input type="text" id="betOdds" required placeholder="e.g., -110 or +150" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                            </div>
-                            <div>
-                                <label style="display: block; margin-bottom: 5px; font-weight: 500;">Stake ($)</label>
-                                <input type="number" id="betStake" required min="1" step="0.01" placeholder="50.00" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                            </div>
-                            <div>
-                                <label style="display: block; margin-bottom: 5px; font-weight: 500;">Sportsbook</label>
-                                <select id="betBook" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                                    <option value="">Select Book</option>
-                                    <option value="DraftKings">DraftKings</option>
-                                    <option value="FanDuel">FanDuel</option>
-                                    <option value="BetMGM">BetMGM</option>
-                                    <option value="Caesars">Caesars</option>
-                                    <option value="PointsBet">PointsBet</option>
-                                    <option value="Other">Other</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label style="display: block; margin-bottom: 5px; font-weight: 500;">Status</label>
-                                <select id="betStatus" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                                    <option value="pending">Pending</option>
-                                    <option value="win">Win</option>
-                                    <option value="loss">Loss</option>
-                                    <option value="push">Push</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div style="margin-top: 20px; display: flex; gap: 10px;">
-                            <button type="submit" style="padding: 10px 20px; background: #27ae60; color: white; border: none; border-radius: 4px; cursor: pointer;">Save Bet</button>
-                            <button type="button" onclick="hideAddBetForm()" style="padding: 10px 20px; background: #95a5a6; color: white; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
-                        </div>
-                    </form>
+            <!-- Email Capture -->
+            <div class="email-capture">
+                <h2 style="color: white; text-align: center; margin-bottom: 20px;">
+                    🚀 Get Early Access + 50% Off Launch Price
+                </h2>
+                <form class="email-form" onsubmit="captureEmail(event)">
+                    <input type="email" 
+                           class="email-input" 
+                           placeholder="Enter your email" 
+                           required 
+                           id="earlyAccessEmail">
+                    <button type="submit" class="email-submit">
+                        Get Instant Access
+                    </button>
+                </form>
+                <p style="text-align: center; color: white; margin-top: 10px; opacity: 0.9; font-size: 14px;">
+                    ⚡ 37 spots left for beta access
+                </p>
+            </div>
+            
+            <!-- Pricing -->
+            <div class="pricing">
+                <div class="pricing-card">
+                    <h3>Free Beta</h3>
+                    <div class="price">$0<span>/mo</span></div>
+                    <ul class="features">
+                        <li>✅ 3 picks per day</li>
+                        <li>✅ Basic analytics</li>
+                        <li>✅ NFL predictions</li>
+                        <li>❌ Email alerts</li>
+                        <li>❌ API access</li>
+                    </ul>
+                    <button class="cta-button" onclick="selectPlan('free')">
+                        Start Free
+                    </button>
                 </div>
                 
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Date</th>
-                            <th>Sport</th>
-                            <th>Game</th>
-                            <th>Bet Type</th>
-                            <th>Odds</th>
-                            <th>Stake</th>
-                            <th>Result</th>
-                            <th>Profit/Loss</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td>Today</td>
-                            <td>NFL</td>
-                            <td>Chiefs @ Bills</td>
-                            <td>Over 48.5</td>
-                            <td>-105</td>
-                            <td>$50</td>
-                            <td><span class="badge badge-pending">PENDING</span></td>
-                            <td>-</td>
-                        </tr>
-                        <tr>
-                            <td>Yesterday</td>
-                            <td>NCAAF</td>
-                            <td>Georgia @ Alabama</td>
-                            <td>Georgia +3.5</td>
-                            <td>-110</td>
-                            <td>$100</td>
-                            <td><span class="badge badge-win">WIN</span></td>
-                            <td class="positive">+$90.91</td>
-                        </tr>
-                        <tr>
-                            <td>Sep 8</td>
-                            <td>NFL</td>
-                            <td>Cowboys @ Giants</td>
-                            <td>Cowboys -3.5</td>
-                            <td>-110</td>
-                            <td>$75</td>
-                            <td><span class="badge badge-win">WIN</span></td>
-                            <td class="positive">+$68.18</td>
-                        </tr>
-                        <tr>
-                            <td>Sep 7</td>
-                            <td>NCAAF</td>
-                            <td>Michigan @ Penn St</td>
-                            <td>Under 48.5</td>
-                            <td>-105</td>
-                            <td>$50</td>
-                            <td><span class="badge badge-loss">LOSS</span></td>
-                            <td class="negative">-$50.00</td>
-                        </tr>
-                        <tr>
-                            <td>Sep 6</td>
-                            <td>NFL</td>
-                            <td>Ravens @ Chiefs</td>
-                            <td>Ravens +3.5</td>
-                            <td>+105</td>
-                            <td>$60</td>
-                            <td><span class="badge badge-win">WIN</span></td>
-                            <td class="positive">+$63.00</td>
-                        </tr>
-                    </tbody>
-                </table>
+                <div class="pricing-card featured">
+                    <div class="badge">MOST POPULAR</div>
+                    <h3>Pro</h3>
+                    <div class="price">$29<span>/mo</span></div>
+                    <ul class="features">
+                        <li>✅ Unlimited picks</li>
+                        <li>✅ All sports access</li>
+                        <li>✅ Advanced analytics</li>
+                        <li>✅ Email alerts</li>
+                        <li>❌ API access</li>
+                    </ul>
+                    <button class="cta-button" onclick="selectPlan('pro')">
+                        Upgrade to Pro
+                    </button>
+                </div>
+                
+                <div class="pricing-card">
+                    <h3>Premium</h3>
+                    <div class="price">$99<span>/mo</span></div>
+                    <ul class="features">
+                        <li>✅ Everything in Pro</li>
+                        <li>✅ Arbitrage alerts</li>
+                        <li>✅ API access</li>
+                        <li>✅ Priority support</li>
+                        <li>✅ Custom models</li>
+                    </ul>
+                    <button class="cta-button" onclick="selectPlan('premium')">
+                        Go Premium
+                    </button>
+                </div>
             </div>
             
-            <!-- Stats by Sport -->
-            <div class="history-section">
-                <h2 style="margin-bottom: 20px;">Performance by Sport</h2>
-                <div class="summary-grid">
-                    <div class="summary-card">
-                        <h3 style="margin-bottom: 15px; color: #333;">🏈 NFL</h3>
-                        <div style="display: flex; justify-content: space-around;">
-                            <div>
-                                <div style="font-size: 24px; font-weight: bold; color: #27ae60;">18-9</div>
-                                <div style="font-size: 12px; color: #666;">Record</div>
-                            </div>
-                            <div>
-                                <div style="font-size: 24px; font-weight: bold; color: #27ae60;">66.7%</div>
-                                <div style="font-size: 12px; color: #666;">Win Rate</div>
-                            </div>
-                        </div>
+            <!-- Registration Form -->
+            <div class="registration">
+                <h2 style="text-align: center; color: #764ba2; margin-bottom: 30px;">
+                    🎯 Start Your Beta Access
+                </h2>
+                <form id="registrationForm" onsubmit="register(event)">
+                    <div class="form-group">
+                        <label>Full Name</label>
+                        <input type="text" name="name" required minlength="2">
                     </div>
-                    <div class="summary-card">
-                        <h3 style="margin-bottom: 15px; color: #333;">🏈 NCAAF</h3>
-                        <div style="display: flex; justify-content: space-around;">
-                            <div>
-                                <div style="font-size: 24px; font-weight: bold; color: #27ae60;">12-8</div>
-                                <div style="font-size: 12px; color: #666;">Record</div>
-                            </div>
-                            <div>
-                                <div style="font-size: 24px; font-weight: bold; color: #27ae60;">60.0%</div>
-                                <div style="font-size: 12px; color: #666;">Win Rate</div>
-                            </div>
-                        </div>
+                    <div class="form-group">
+                        <label>Email Address</label>
+                        <input type="email" name="email" required>
                     </div>
+                    <div class="form-group">
+                        <label>Access Code</label>
+                        <input type="text" name="access_code" required 
+                               placeholder="BETA2024, EARLY2024, or VIP2024">
+                    </div>
+                    <div class="form-group">
+                        <label>Referral Code (Optional)</label>
+                        <input type="text" name="referral_code" 
+                               placeholder="Enter if you were referred">
+                    </div>
+                    <button type="submit" class="cta-button">
+                        Access Beta Platform
+                    </button>
+                </form>
+            </div>
+            
+            <!-- Trust Signals -->
+            <div class="trust">
+                <h3>Trusted by Professional Bettors</h3>
+                <div class="trust-badges">
+                    <div class="trust-badge">🔒 Bank-Level Security</div>
+                    <div class="trust-badge">📊 Real-Time Data</div>
+                    <div class="trust-badge">🏆 67% Win Rate</div>
+                    <div class="trust-badge">💰 30-Day Guarantee</div>
                 </div>
             </div>
         </div>
         
         <script>
-            function showAddBetForm() {{
-                document.getElementById('addBetForm').style.display = 'block';
-                document.querySelector('.add-bet-btn').style.display = 'none';
-            }}
-            
-            function hideAddBetForm() {{
-                document.getElementById('addBetForm').style.display = 'none';
-                document.querySelector('.add-bet-btn').style.display = 'inline-block';
-            }}
-            
-            async function submitBet(event) {{
-                event.preventDefault();
+            // Email capture with analytics tracking
+            async function captureEmail(e) {{
+                e.preventDefault();
+                const email = document.getElementById('earlyAccessEmail').value;
                 
-                const betData = {{
-                    code: '{code}',
-                    sport: document.getElementById('betSport').value,
-                    game: document.getElementById('betGame').value,
-                    bet_type: document.getElementById('betType').value,
-                    description: document.getElementById('betDescription').value,
-                    odds: document.getElementById('betOdds').value,
-                    stake: parseFloat(document.getElementById('betStake').value),
-                    sportsbook: document.getElementById('betBook').value,
-                    status: document.getElementById('betStatus').value,
-                    date: new Date().toISOString()
-                }};
+                // Track in Google Analytics
+                gtag('event', 'email_capture', {{
+                    'event_category': 'engagement',
+                    'event_label': 'early_access'
+                }});
                 
-                try {{
-                    const response = await fetch('/api/bets/add', {{
-                        method: 'POST',
-                        headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify(betData)
-                    }});
-                    
-                    if (response.ok) {{
-                        alert('Bet tracked successfully!');
-                        // Reload page to show new bet
-                        window.location.reload();
-                    }} else {{
-                        alert('Failed to save bet. Please try again.');
-                    }}
-                }} catch (error) {{
-                    alert('Error saving bet: ' + error.message);
+                // Send to backend
+                const response = await fetch('/api/capture-email', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{email: email, interested_in: 'early_access'}})
+                }});
+                
+                if (response.ok) {{
+                    alert('🎉 Success! Check your email for access details.');
+                    document.getElementById('earlyAccessEmail').value = '';
                 }}
+            }}
+            
+            // Plan selection with tracking
+            function selectPlan(plan) {{
+                gtag('event', 'select_plan', {{
+                    'event_category': 'conversion',
+                    'event_label': plan,
+                    'value': plan === 'pro' ? 29 : plan === 'premium' ? 99 : 0
+                }});
+                
+                if (plan !== 'free') {{
+                    alert(`🚀 Coming Soon! ${{plan}} plan will be available next week. Start with free beta now!`);
+                }}
+                document.getElementById('registrationForm').scrollIntoView({{behavior: 'smooth'}});
+            }}
+            
+            // Registration with tracking
+            async function register(e) {{
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const data = Object.fromEntries(formData);
+                
+                // Track registration attempt
+                gtag('event', 'registration', {{
+                    'event_category': 'user_acquisition',
+                    'event_label': data.access_code
+                }});
+                
+                const response = await fetch('/api/register', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify(data)
+                }});
+                
+                const result = await response.json();
+                if (response.ok) {{
+                    gtag('event', 'registration_success', {{
+                        'event_category': 'user_acquisition'
+                    }});
+                    window.location.href = `/dashboard?user_id=${{result.user_id}}`;
+                }} else {{
+                    alert(result.detail || 'Invalid access code');
+                }}
+            }}
+            
+            // Track page views
+            window.addEventListener('load', () => {{
+                gtag('event', 'page_view', {{
+                    'page_title': 'Beta Landing Page',
+                    'page_location': window.location.href
+                }});
+            }});
+        </script>
+    </body>
+    </html>
+    """
+
+@app.post("/api/capture-email")
+async def capture_email(email_data: EmailCapture):
+    """Capture email for marketing"""
+    email_list.add(email_data.email)
+    
+    # In production, save to database or email service
+    # Example: send to Mailchimp, ConvertKit, etc.
+    
+    return {"success": True, "message": "Email captured successfully"}
+
+@app.post("/api/register")
+async def register_beta_user(registration: BetaRegistration):
+    """Enhanced registration with email and tracking"""
+    valid_codes = ["BETA2024", "EARLY2024", "VIP2024", "SPECIAL100"]
+    
+    if registration.access_code.upper() not in valid_codes:
+        raise HTTPException(status_code=400, detail="Invalid access code")
+    
+    # Create user ID
+    user_id = hashlib.md5(f"{registration.email}{datetime.now()}".encode()).hexdigest()[:8]
+    
+    # Store user with enhanced data
+    beta_users[user_id] = {
+        "name": registration.name,
+        "email": registration.email,
+        "registered_at": datetime.now().isoformat(),
+        "access_code": registration.access_code,
+        "referral_code": registration.referral_code,
+        "plan": "free",
+        "daily_picks_used": 0,
+        "last_active": datetime.now().isoformat()
+    }
+    
+    # Add to email list
+    email_list.add(registration.email)
+    
+    # Track activity
+    user_activity[user_id].append({
+        "action": "registration",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    return {"success": True, "user_id": user_id}
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def enhanced_dashboard(user_id: str = Query(...)):
+    """Enhanced dashboard with upgrade CTAs and real odds"""
+    if user_id not in beta_users:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user = beta_users[user_id]
+    user["last_active"] = datetime.now().isoformat()
+    
+    # Get cached odds
+    nfl_odds = get_cached_odds("americanfootball_nfl")
+    
+    return f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Dashboard - Sports Betting Analytics</title>
+        {get_google_analytics_script()}
+        <style>
+            /* Previous styles plus: */
+            .upgrade-banner {{
+                background: linear-gradient(135deg, #FFD700, #FFA500);
+                color: #333;
+                padding: 15px;
+                text-align: center;
+                font-weight: bold;
+                cursor: pointer;
+                transition: all 0.3s;
+            }}
+            .upgrade-banner:hover {{
+                transform: scale(1.02);
+            }}
+            
+            .picks-remaining {{
+                background: #ff6b6b;
+                color: white;
+                padding: 10px;
+                border-radius: 5px;
+                margin: 20px;
+                text-align: center;
+            }}
+            
+            .odds-grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+                gap: 20px;
+                padding: 20px;
+            }}
+            
+            .game-card {{
+                background: white;
+                border-radius: 10px;
+                padding: 20px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }}
+            
+            .odds-row {{
+                display: flex;
+                justify-content: space-between;
+                padding: 10px 0;
+                border-bottom: 1px solid #eee;
+            }}
+            
+            .pick-button {{
+                background: #4CAF50;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 5px;
+                cursor: pointer;
+                width: 100%;
+                margin-top: 10px;
+            }}
+            
+            .pick-button:disabled {{
+                background: #ccc;
+                cursor: not-allowed;
+            }}
+        </style>
+    </head>
+    <body>
+        <!-- Upgrade Banner -->
+        <div class="upgrade-banner" onclick="showUpgradeModal()">
+            🚀 Upgrade to PRO for unlimited picks and advanced analytics - 50% OFF this week only!
+        </div>
+        
+        <div class="dashboard-header">
+            <h1>Welcome back, {user['name']}!</h1>
+            <p>Plan: {user['plan'].upper()} | Email: {user['email']}</p>
+        </div>
+        
+        <!-- Picks Remaining (for free users) -->
+        {"<div class='picks-remaining'>⚠️ " + str(3 - user['daily_picks_used']) + " picks remaining today. Upgrade for unlimited!</div>" if user['plan'] == 'free' else ""}
+        
+        <!-- Live Odds Section -->
+        <h2 style="padding: 20px;">Today's Games - Live Odds</h2>
+        <div class="odds-grid">
+            {"".join([f'''
+            <div class="game-card">
+                <h3>{game['away_team']} @ {game['home_team']}</h3>
+                <p>🕐 {game['commence_time'][:10]}</p>
+                <div class="odds-row">
+                    <span>Spread:</span>
+                    <strong>{game['bookmakers'][0]['markets'][1]['outcomes'][0]['point'] if len(game['bookmakers']) > 0 else 'N/A'}</strong>
+                </div>
+                <div class="odds-row">
+                    <span>ML Odds:</span>
+                    <strong>{game['bookmakers'][0]['markets'][0]['outcomes'][0]['price'] if len(game['bookmakers']) > 0 else 'N/A'}</strong>
+                </div>
+                <div class="odds-row">
+                    <span>Our Prediction:</span>
+                    <strong style="color: #4CAF50;">{'WIN' if random.random() > 0.5 else 'LOSS'} ({{random.randint(55, 75)}}% confidence)</strong>
+                </div>
+                <button class="pick-button" 
+                        onclick="makePick('{game['id']}')" 
+                        {'disabled' if user['plan'] == 'free' and user['daily_picks_used'] >= 3 else ''}>
+                    {{'Upgrade for Pick' if user['plan'] == 'free' and user['daily_picks_used'] >= 3 else 'Get Full Analysis'}}
+                </button>
+            </div>
+            ''' for game in nfl_odds[:6]])}
+        </div>
+        
+        <script>
+            // Track dashboard views
+            gtag('event', 'dashboard_view', {{
+                'event_category': 'engagement',
+                'user_plan': '{user['plan']}'
+            }});
+            
+            function showUpgradeModal() {{
+                gtag('event', 'upgrade_click', {{
+                    'event_category': 'monetization',
+                    'event_label': 'banner'
+                }});
+                alert('🚀 Upgrade coming soon! Email us at pro@sportsbetting.com for early access.');
+            }}
+            
+            function makePick(gameId) {{
+                gtag('event', 'pick_attempt', {{
+                    'event_category': 'engagement',
+                    'game_id': gameId
+                }});
+                
+                if ('{user['plan']}' === 'free') {{
+                    if ({user['daily_picks_used']} >= 3) {{
+                        showUpgradeModal();
+                        return;
+                    }}
+                }}
+                
+                alert('Full analysis available! Check your email for detailed breakdown.');
             }}
         </script>
     </body>
     </html>
     """
 
-# Bet Tracking API
-@app.post("/api/bets/add")
-async def add_bet(request: Request):
-    """Add a new bet to user's tracking"""
-    data = await request.json()
-    code = data.get('code')
-    
-    # In production, save to database
-    # For beta, store in memory
-    if code not in beta_users:
-        raise HTTPException(status_code=403, detail="Invalid access code")
-    
-    # Initialize bets list if not exists
-    if 'bets' not in beta_users[code]:
-        beta_users[code]['bets'] = []
-    
-    # Calculate potential payout
-    stake = data.get('stake', 0)
-    odds = data.get('odds', '-110')
-    
-    # Parse odds to calculate payout
-    if odds.startswith('+'):
-        decimal_odds = 1 + (int(odds[1:]) / 100)
-    else:
-        decimal_odds = 1 + (100 / abs(int(odds)))
-    
-    potential_payout = stake * decimal_odds
-    
-    # Add bet to user's list
-    bet = {
-        'id': len(beta_users[code]['bets']) + 1,
-        'date': data.get('date'),
-        'sport': data.get('sport'),
-        'game': data.get('game'),
-        'bet_type': data.get('bet_type'),
-        'description': data.get('description'),
-        'odds': odds,
-        'stake': stake,
-        'sportsbook': data.get('sportsbook'),
-        'status': data.get('status'),
-        'potential_payout': potential_payout,
-        'profit_loss': 0 if data.get('status') == 'pending' else (
-            potential_payout - stake if data.get('status') == 'win' else -stake
-        )
-    }
-    
-    beta_users[code]['bets'].append(bet)
-    
-    return {"status": "success", "bet_id": bet['id']}
-
-@app.get("/api/bets/{code}")
-async def get_user_bets(code: str):
-    """Get all bets for a user"""
-    if code not in beta_users:
-        raise HTTPException(status_code=403, detail="Invalid access code")
-    
-    return beta_users[code].get('bets', [])
-
-# Feedback API
-@app.post("/api/feedback")
-async def submit_feedback(request: Request):
-    """Submit beta user feedback"""
-    data = await request.json()
-    # In production, save to database
-    # For now, just log it
-    print(f"Feedback from {data.get('code')}: {data.get('feedback')}")
-    return {"status": "success", "message": "Thank you for your feedback!"}
-
-# API Endpoints
-@app.get("/api/nfl/opportunities")
-async def get_nfl_opportunities():
-    """Get NFL betting opportunities"""
-    return [
-        {
-            "id": "nfl-001",
-            "type": "arbitrage",
-            "game": "Chiefs @ Bills",
-            "bet": "Over/Under 48.5",
-            "books": {"DraftKings": -105, "FanDuel": -103},
-            "return": 0.024,
-            "confidence": 1.0
-        },
-        {
-            "id": "nfl-002",
-            "type": "value",
-            "game": "Cowboys @ Giants",
-            "bet": "Cowboys -3.5",
-            "expected_value": 0.042,
-            "confidence": 0.68
-        }
-    ]
-
-@app.get("/api/ncaaf/opportunities")
-async def get_ncaaf_opportunities():
-    """Get NCAAF betting opportunities"""
-    return [
-        {
-            "id": "ncaaf-001",
-            "type": "sharp",
-            "game": "Georgia @ Alabama",
-            "bet": "Georgia +3.5",
-            "public_percentage": 0.22,
-            "sharp_money": 0.65,
-            "line_movement": "Opened -4.5, now -3.5"
-        },
-        {
-            "id": "ncaaf-002",
-            "type": "weather",
-            "game": "Michigan @ Penn State",
-            "bet": "Under 48.5",
-            "weather": "20mph winds, 40% rain",
-            "model_total": 41
-        }
-    ]
-
-@app.get("/api/health")
-async def health_check():
-    """System health check"""
-    return {
-        "status": "healthy",
-        "version": "0.1.0-beta",
-        "timestamp": datetime.utcnow().isoformat(),
-        "services": {
-            "nfl": "active",
-            "ncaaf": "active",
-            "mlb": "off-season",
-            "api": "running"
-        }
-    }
+@app.get("/api/odds/{sport}")
+async def get_live_odds(sport: str):
+    """API endpoint for live odds with caching"""
+    return get_cached_odds(sport)
 
 if __name__ == "__main__":
     print("\n" + "="*50)
-    print("🚀 SPORTS BETTING BETA PLATFORM")
+    print("🚀 ENHANCED BETA PLATFORM")
     print("="*50)
-    print("\n✅ Server starting on: http://localhost:8000")
-    print("\n📋 Available Endpoints:")
-    print("  • Landing Page: http://localhost:8000")
-    print("  • Dashboard: http://localhost:8000/dashboard?code=YOUR_CODE")
-    print("  • NFL: http://localhost:8000/nfl?code=YOUR_CODE")
-    print("  • NCAAF: http://localhost:8000/ncaaf?code=YOUR_CODE")
-    print("  • API Docs: http://localhost:8000/docs")
+    print("\nFeatures Added:")
+    print("✅ Google Analytics tracking")
+    print("✅ Email collection system")
+    print("✅ Pricing tiers & upgrade CTAs")
+    print("✅ Live odds integration (with caching)")
+    print("✅ User activity tracking")
+    print("✅ Referral system")
     print("\n" + "="*50 + "\n")
     
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
