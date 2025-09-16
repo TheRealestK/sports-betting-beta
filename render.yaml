@@ -12,7 +12,7 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: ODDS_API_KEY
-        value: "demo_key_for_testing"
+        value: "12ef8ff548ae7e9d3b7f7a6da8a0306d"
       - key: PYTHON_VERSION
         value: "3.11"
 
