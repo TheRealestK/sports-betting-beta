@@ -26,7 +26,7 @@ from pydantic import BaseModel, EmailStr, Field
 import uvicorn
 
 # Configuration
-GOOGLE_ANALYTICS_ID = "G-XXXXXXXXXX"  # Replace with your actual GA ID
+GOOGLE_ANALYTICS_ID = "G-FPHYK266CT"  # Replace with your actual GA ID
 ODDS_API_KEY = os.environ.get('ODDS_API_KEY', 'your_api_key_here')
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 
