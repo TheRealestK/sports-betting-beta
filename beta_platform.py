@@ -68,6 +68,17 @@ else:
     nfl_model = None
     mlb_model = None
 
+def format_game_time(iso_time: str) -> str:
+    """Format ISO time to readable format"""
+    try:
+        if iso_time:
+            dt = datetime.fromisoformat(iso_time.replace('Z', '+00:00'))
+            # Convert to Eastern Time (common for sports)
+            return dt.strftime("%b %d, %I:%M %p ET")
+        return "Time TBD"
+    except:
+        return "Time TBD"
+
 class BettingRecommendation:
     """Generate clear betting recommendations"""
     
@@ -389,28 +400,62 @@ def generate_mock_odds(sport: str) -> List[Dict]:
             ("Kansas City Chiefs", "Buffalo Bills"),
             ("Dallas Cowboys", "Philadelphia Eagles"),
             ("San Francisco 49ers", "Los Angeles Rams"),
-            ("Baltimore Ravens", "Cincinnati Bengals")
+            ("Baltimore Ravens", "Cincinnati Bengals"),
+            ("Green Bay Packers", "Chicago Bears"),
+            ("New England Patriots", "New York Jets"),
+            ("Pittsburgh Steelers", "Cleveland Browns"),
+            ("Miami Dolphins", "Jacksonville Jaguars"),
+            ("Tennessee Titans", "Houston Texans"),
+            ("Seattle Seahawks", "Arizona Cardinals"),
+            ("Las Vegas Raiders", "Denver Broncos"),
+            ("Tampa Bay Buccaneers", "New Orleans Saints"),
+            ("Minnesota Vikings", "Detroit Lions"),
+            ("Indianapolis Colts", "Los Angeles Chargers"),
+            ("Atlanta Falcons", "Carolina Panthers")
         ]
     elif "nba" in sport:
         teams = [
             ("Los Angeles Lakers", "Boston Celtics"),
             ("Golden State Warriors", "Phoenix Suns"),
             ("Milwaukee Bucks", "Miami Heat"),
-            ("Denver Nuggets", "Dallas Mavericks")
+            ("Denver Nuggets", "Dallas Mavericks"),
+            ("Philadelphia 76ers", "Brooklyn Nets"),
+            ("Memphis Grizzlies", "Sacramento Kings"),
+            ("Cleveland Cavaliers", "New York Knicks"),
+            ("Portland Trail Blazers", "Utah Jazz"),
+            ("Atlanta Hawks", "Orlando Magic"),
+            ("Toronto Raptors", "Chicago Bulls"),
+            ("San Antonio Spurs", "Houston Rockets"),
+            ("Indiana Pacers", "Detroit Pistons")
         ]
     elif "mlb" in sport:
         teams = [
             ("New York Yankees", "Boston Red Sox"),
             ("Los Angeles Dodgers", "San Francisco Giants"),
             ("Houston Astros", "Texas Rangers"),
-            ("Atlanta Braves", "New York Mets")
+            ("Atlanta Braves", "New York Mets"),
+            ("Philadelphia Phillies", "Washington Nationals"),
+            ("Chicago Cubs", "St. Louis Cardinals"),
+            ("San Diego Padres", "Arizona Diamondbacks"),
+            ("Tampa Bay Rays", "Baltimore Orioles"),
+            ("Cleveland Guardians", "Minnesota Twins"),
+            ("Toronto Blue Jays", "Seattle Mariners"),
+            ("Milwaukee Brewers", "Cincinnati Reds")
         ]
     else:  # NCAAF
         teams = [
             ("Alabama", "Georgia"),
             ("Ohio State", "Michigan"),
             ("Texas", "Oklahoma"),
-            ("USC", "Notre Dame")
+            ("USC", "Notre Dame"),
+            ("Florida State", "Miami"),
+            ("Penn State", "Michigan State"),
+            ("Oregon", "Washington"),
+            ("LSU", "Auburn"),
+            ("Tennessee", "Florida"),
+            ("Clemson", "South Carolina"),
+            ("Wisconsin", "Iowa"),
+            ("UCLA", "Stanford")
         ]
     
     games = []
@@ -497,7 +542,7 @@ def get_dashboard_html(user: str, sport: str = "NFL") -> str:
     elite_bets = []
     arbitrage_opportunities = []
     
-    for game in games[:8]:  # Analyze up to 8 games
+    for game in games[:20]:  # Analyze up to 20 games
         analysis = analyze_game_with_ml(game, sport)
         recommendation = BettingRecommendation.generate_recommendation(game, analysis)
         
@@ -539,7 +584,7 @@ def get_dashboard_html(user: str, sport: str = "NFL") -> str:
         
         # Generate bet recommendations HTML
         bets_html = ""
-        for bet in recommendation["bets"][:3]:  # Show top 3 bets
+        for bet in recommendation["bets"][:4]:  # Show top 4 bets
             bet_color = "#4CAF50" if bet["confidence"] >= 70 else "#2196F3"
             bets_html += f"""
             <div style="background: {bet_color}; color: white; padding: 12px; 
@@ -580,7 +625,13 @@ def get_dashboard_html(user: str, sport: str = "NFL") -> str:
         <div class="bet-card">
             <div class="bet-card-header">
                 <h3>{game['home_team']} vs {game['away_team']}</h3>
-                {ml_badge}
+                <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px;">
+                    <span style="background: #2196F3; color: white; padding: 4px 10px; 
+                                border-radius: 6px; font-size: 13px; font-weight: 500;">
+                        📅 {format_game_time(game.get('commence_time', ''))}
+                    </span>
+                    {ml_badge}
+                </div>
             </div>
             <div class="confidence-bar">
                 <div class="confidence-fill" style="width: {analysis.get('confidence_score', 50)}%; 
