@@ -862,7 +862,7 @@ async def api_status():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("HIGH FIDELITY SPORTS BETTING ANALYSIS PLATFORM")
+    print("HIGH FIDELITY SPORTS BETTING ANALYSIS PLATFORM v2.0")
     print("=" * 60)
     print("✅ Real-time odds from multiple sportsbooks")
     print("🤖 Advanced AI/ML predictions")
