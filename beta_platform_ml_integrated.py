@@ -18,8 +18,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 import requests
 import uvicorn
 
-# Add path for model imports (disabled for cloud deployment)
-# sys.path.append('/Users/therealestk/sports betting 100')
+# Add path for model imports
+sys.path.append('/Users/therealestk/sports betting 100')
 
 # Configuration
 ODDS_API_KEY = os.environ.get('ODDS_API_KEY', '12ef8ff548ae7e9d3b7f7a6da8a0306d')
@@ -48,10 +48,33 @@ def load_ml_models():
     """Load trained ML models."""
     print("[ML] Loading trained models...")
     
-    # ML models disabled for cloud deployment
-    # Models would need to be uploaded to cloud storage
-    print("⚠️ ML models disabled for cloud deployment")
-    print("   To enable: Upload models to cloud storage and update paths")
+    # Load NFL models
+    try:
+        nfl_path = "/Users/therealestk/sports betting 100/nfl_trained_models"
+        if os.path.exists(f"{nfl_path}/spread_xgb.pkl"):
+            with open(f"{nfl_path}/spread_xgb.pkl", "rb") as f:
+                ML_MODELS["nfl"]["spread"] = pickle.load(f)
+            with open(f"{nfl_path}/total_xgb.pkl", "rb") as f:
+                ML_MODELS["nfl"]["total"] = pickle.load(f)
+            with open(f"{nfl_path}/scalers.pkl", "rb") as f:
+                ML_MODELS["nfl"]["scaler"] = pickle.load(f)
+            
+            # Import the adapter
+            from nfl_feature_adapter import NFLFeatureAdapter
+            ML_MODELS["nfl"]["adapter"] = NFLFeatureAdapter()
+            print("✅ NFL models loaded")
+    except Exception as e:
+        print(f"❌ NFL models failed: {e}")
+    
+    # Load MLB models
+    try:
+        mlb_path = "/Users/therealestk/sports betting 100/models/mlb_models.pkl"
+        if os.path.exists(mlb_path):
+            with open(mlb_path, "rb") as f:
+                ML_MODELS["mlb"]["models"] = pickle.load(f)
+            print("✅ MLB models loaded")
+    except Exception as e:
+        print(f"❌ MLB models failed: {e}")
 
 def fetch_odds_from_api(sport: str) -> List[Dict]:
     """Fetch odds from API."""
@@ -378,5 +401,4 @@ if __name__ == "__main__":
     print("⚡ Edge detection algorithms")
     print("=" * 60)
     
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8010)
