@@ -51,9 +51,7 @@ def fetch_odds_from_api(sport: str) -> List[Dict]:
             params={
                 'apiKey': ODDS_API_KEY,
                 'regions': 'us',
-                'markets': 'h2h,spreads,totals,team_totals,alternate_spreads,alternate_totals',
-                'oddsFormat': 'american',
-                'bookmakers': 'draftkings,fanduel,betmgm,caesars,pointsbetus'
+                'markets': 'h2h,spreads,totals'  # Only standard markets that work for all sports
             },
             timeout=10
         )
@@ -61,9 +59,10 @@ def fetch_odds_from_api(sport: str) -> List[Dict]:
         if response.status_code == 200:
             data = response.json()
             print(f"[API] ✅ Got {len(data)} {sport} games")
-            return data
+            print(f"[API] Remaining requests: {response.headers.get('x-requests-remaining', 'N/A')}")
+            return data[:20]  # Limit to 20 games for performance
         else:
-            print(f"[API] ❌ Error {response.status_code}")
+            print(f"[API] ❌ Error {response.status_code}: {response.text[:200]}")
             return []
     except Exception as e:
         print(f"[API] ❌ Error: {e}")
