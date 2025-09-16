@@ -255,7 +255,7 @@ async def root():
 
 @app.get("/dashboard/{sport}")
 async def dashboard(sport: str):
-    """Sport dashboard with ML predictions."""
+    """Sport dashboard with ML predictions organized by date."""
     cache = SERVER_CACHE.get(sport, {})
     games = cache.get("data", [])
     predictions = cache.get("predictions", {})
@@ -263,68 +263,307 @@ async def dashboard(sport: str):
     if not games:
         return HTMLResponse(f"<h1>No {sport.upper()} games available. Refresh in a moment.</h1>")
     
+    # Group games by date
+    from datetime import datetime
+    from collections import defaultdict
+    games_by_date = defaultdict(list)
+    
+    for game in games:
+        try:
+            game_time = game.get('commence_time', '')
+            if game_time:
+                dt = datetime.fromisoformat(game_time.replace('Z', '+00:00'))
+                date_key = dt.strftime("%A, %B %d")
+                games_by_date[date_key].append(game)
+        except:
+            games_by_date["Date TBD"].append(game)
+    
+    # Sort dates
+    sorted_dates = sorted(games_by_date.keys())
+    
+    # Count high confidence picks
+    high_conf_picks = sum(1 for p in predictions.values() if p.get("confidence", 0) > 75)
+    total_edges = sum(1 for p in predictions.values() if p.get("ml_edge", False))
+    
     html = f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>{sport.upper()} Dashboard - ML Enhanced</title>
+        <title>{sport.upper()} Dashboard - Smart Betting Analysis</title>
         <style>
-            body {{ font-family: sans-serif; background: #1a1a2e; color: white; padding: 20px; }}
-            .header {{ background: #0f3460; padding: 20px; border-radius: 10px; margin-bottom: 20px; }}
-            .game-card {{ background: #16213e; padding: 20px; margin: 15px 0; border-radius: 10px; }}
-            .ml-prediction {{ background: #2ecc71; color: black; padding: 10px; margin: 10px 0; border-radius: 5px; }}
-            .edge-alert {{ background: #e74c3c; color: white; padding: 5px 10px; border-radius: 5px; }}
-            .odds-box {{ background: #34495e; padding: 10px; margin: 5px 0; border-radius: 5px; }}
-            .confidence {{ display: inline-block; padding: 5px 10px; border-radius: 5px; }}
-            .high-conf {{ background: #27ae60; }}
-            .med-conf {{ background: #f39c12; }}
-            .low-conf {{ background: #7f8c8d; }}
+            body {{ 
+                font-family: -apple-system, sans-serif; 
+                background: linear-gradient(135deg, #1e3c72, #2a5298); 
+                color: white; 
+                padding: 20px;
+                margin: 0;
+            }}
+            .header {{ 
+                background: rgba(15, 52, 96, 0.9); 
+                padding: 25px; 
+                border-radius: 15px; 
+                margin-bottom: 25px;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            }}
+            .summary-stats {{
+                display: flex;
+                gap: 20px;
+                margin: 20px 0;
+            }}
+            .stat-box {{
+                background: rgba(255,255,255,0.1);
+                padding: 15px 20px;
+                border-radius: 10px;
+                flex: 1;
+                text-align: center;
+            }}
+            .stat-number {{
+                font-size: 28px;
+                font-weight: bold;
+                color: #4CAF50;
+            }}
+            .date-section {{
+                background: rgba(255,255,255,0.05);
+                padding: 15px;
+                margin: 20px 0;
+                border-radius: 10px;
+                border-left: 4px solid #4CAF50;
+            }}
+            .date-header {{
+                font-size: 20px;
+                font-weight: bold;
+                margin-bottom: 15px;
+                color: #81c784;
+            }}
+            .game-card {{ 
+                background: rgba(22, 33, 62, 0.95); 
+                padding: 20px; 
+                margin: 15px 0; 
+                border-radius: 12px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+                transition: transform 0.2s;
+            }}
+            .game-card:hover {{
+                transform: translateY(-2px);
+                box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+            }}
+            .teams {{
+                font-size: 18px;
+                font-weight: 600;
+                margin-bottom: 10px;
+            }}
+            .game-time {{
+                color: #aaa;
+                font-size: 14px;
+                margin-bottom: 15px;
+            }}
+            .betting-recommendation {{
+                background: linear-gradient(135deg, #2ecc71, #27ae60);
+                color: white;
+                padding: 15px;
+                margin: 10px 0;
+                border-radius: 8px;
+                font-weight: 500;
+            }}
+            .recommendation-title {{
+                font-size: 16px;
+                font-weight: bold;
+                margin-bottom: 8px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }}
+            .bet-details {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-top: 10px;
+            }}
+            .edge-alert {{ 
+                background: linear-gradient(135deg, #e74c3c, #c0392b); 
+                color: white; 
+                padding: 8px 15px; 
+                border-radius: 20px;
+                font-size: 12px;
+                font-weight: bold;
+                display: inline-block;
+                animation: pulse 2s infinite;
+            }}
+            @keyframes pulse {{
+                0% {{ opacity: 1; }}
+                50% {{ opacity: 0.8; }}
+                100% {{ opacity: 1; }}
+            }}
+            .odds-box {{ 
+                background: rgba(52, 73, 94, 0.5); 
+                padding: 12px; 
+                margin: 8px 0; 
+                border-radius: 8px;
+                font-size: 14px;
+            }}
+            .confidence {{ 
+                display: inline-block; 
+                padding: 6px 12px; 
+                border-radius: 20px;
+                font-size: 14px;
+                font-weight: bold;
+            }}
+            .high-conf {{ 
+                background: linear-gradient(135deg, #27ae60, #229954); 
+                color: white;
+            }}
+            .med-conf {{ 
+                background: linear-gradient(135deg, #f39c12, #e67e22); 
+                color: white;
+            }}
+            .low-conf {{ 
+                background: rgba(127, 140, 141, 0.5); 
+                color: white;
+            }}
+            .action-button {{
+                background: #3498db;
+                color: white;
+                padding: 10px 20px;
+                border-radius: 25px;
+                text-decoration: none;
+                display: inline-block;
+                margin-top: 10px;
+                transition: background 0.3s;
+            }}
+            .action-button:hover {{
+                background: #2980b9;
+            }}
+            .no-edge {{
+                color: #95a5a6;
+                font-style: italic;
+                padding: 10px;
+            }}
         </style>
     </head>
     <body>
         <div class="header">
-            <h1>🏆 {sport.upper()} Betting Dashboard</h1>
-            <p>📅 Last Updated: {cache.get('last_updated').strftime('%I:%M %p') if cache.get('last_updated') else 'Loading...'}</p>
-            <p>🎮 Games: {len(games)} | 🤖 ML Predictions: {len(predictions)}</p>
+            <h1>🎯 {sport.upper()} Smart Betting Dashboard</h1>
+            <p>📊 AI-Powered Analysis with Real-Time Odds</p>
+            
+            <div class="summary-stats">
+                <div class="stat-box">
+                    <div class="stat-number">{len(games)}</div>
+                    <div>Total Games</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-number">{high_conf_picks}</div>
+                    <div>High Confidence Picks</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-number">{total_edges}</div>
+                    <div>Edge Opportunities</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-number">{cache.get('last_updated').strftime('%I:%M %p') if cache.get('last_updated') else 'Loading'}</div>
+                    <div>Last Updated</div>
+                </div>
+            </div>
         </div>
     """
     
-    for game in games[:15]:  # Show first 15 games
-        game_id = game.get("id", "")
-        pred = predictions.get(game_id, {})
+    # Show games organized by date
+    for date in sorted_dates[:5]:  # Show first 5 days
+        date_games = games_by_date[date]
+        
+        # Count edges for this date
+        date_edges = sum(1 for game in date_games 
+                        if predictions.get(game.get("id", ""), {}).get("ml_edge", False))
         
         html += f"""
-        <div class="game-card">
-            <h3>🏟️ {game['home_team']} vs {game['away_team']}</h3>
-            <p>🕐 {game.get('commence_time', 'TBD')[:10]}</p>
+        <div class="date-section">
+            <div class="date-header">
+                📅 {date} 
+                <span style="font-size: 14px; color: #ccc;">
+                    ({len(date_games)} games{f', {date_edges} edges' if date_edges > 0 else ''})
+                </span>
+            </div>
         """
         
-        # Show current odds
-        if game.get('bookmakers'):
-            book = game['bookmakers'][0]
-            html += f"<div class='odds-box'>📖 {book['title']} Odds:<br>"
+        for game in date_games[:8]:  # Max 8 games per day
+            game_id = game.get("id", "")
+            pred = predictions.get(game_id, {})
             
-            for market in book.get('markets', [])[:2]:
-                if market['key'] == 'spreads':
-                    html += f"Spread: {market['outcomes'][0].get('point', 'N/A')}<br>"
-                elif market['key'] == 'totals':
-                    html += f"Total: {market['outcomes'][0].get('point', 'N/A')}<br>"
-            html += "</div>"
-        
-        # Show ML predictions if available
-        if pred and pred.get("spread") is not None:
-            conf_class = "high-conf" if pred["confidence"] > 75 else "med-conf" if pred["confidence"] > 60 else "low-conf"
+            # Format game time
+            try:
+                game_time = game.get('commence_time', '')
+                if game_time:
+                    dt = datetime.fromisoformat(game_time.replace('Z', '+00:00'))
+                    time_str = dt.strftime("%I:%M %p ET")
+                else:
+                    time_str = "Time TBD"
+            except:
+                time_str = "Time TBD"
             
             html += f"""
-            <div class="ml-prediction">
-                <strong>🤖 ML Predictions:</strong><br>
-                Spread: {pred['spread']} (Market: {pred.get('market_spread', 'N/A')})<br>
-                Total: {pred['total']} (Market: {pred.get('market_total', 'N/A')})<br>
-                <span class="confidence {conf_class}">Confidence: {pred['confidence']:.0f}%</span>
-                """
+            <div class="game-card">
+                <div class="teams">🏈 {game['home_team']} vs {game['away_team']}</div>
+                <div class="game-time">🕐 {time_str}</div>
+            """
             
-            if pred.get("ml_edge"):
-                html += f""" <span class="edge-alert">⚡ EDGE DETECTED</span>"""
+            # Show current odds
+            if game.get('bookmakers'):
+                book = game['bookmakers'][0]
+                html += f"<div class='odds-box'>📊 <strong>{book['title']}</strong> Lines: "
+                
+                for market in book.get('markets', []):
+                    if market['key'] == 'spreads' and market.get('outcomes'):
+                        spread = market['outcomes'][0].get('point', 'N/A')
+                        html += f"Spread: {spread:+.1f} | " if isinstance(spread, (int, float)) else f"Spread: {spread} | "
+                    elif market['key'] == 'totals' and market.get('outcomes'):
+                        total = market['outcomes'][0].get('point', 'N/A')
+                        html += f"O/U: {total}"
+                html += "</div>"
+            
+            # Show betting recommendation with ML predictions
+            if pred and pred.get("spread") is not None:
+                conf = pred["confidence"]
+                conf_class = "high-conf" if conf > 75 else "med-conf" if conf > 60 else "low-conf"
+                
+                # Create actionable recommendation
+                if pred.get("ml_edge"):
+                    spread_diff = pred.get('spread_diff', 0)
+                    total_diff = pred.get('total_diff', 0)
+                    
+                    recommendation = ""
+                    if spread_diff > 2:
+                        if pred['spread'] < pred.get('market_spread', 0):
+                            recommendation = f"✅ BET: {game['home_team']} {pred.get('market_spread', 0):+.1f}"
+                        else:
+                            recommendation = f"✅ BET: {game['away_team']} {-pred.get('market_spread', 0):+.1f}"
+                    
+                    if total_diff > 3:
+                        if pred['total'] > pred.get('market_total', 0):
+                            recommendation += f"{'<br>' if recommendation else ''}✅ BET: Over {pred.get('market_total', 0)}"
+                        else:
+                            recommendation += f"{'<br>' if recommendation else ''}✅ BET: Under {pred.get('market_total', 0)}"
+                    
+                    html += f"""
+                    <div class="betting-recommendation">
+                        <div class="recommendation-title">
+                            🤖 AI RECOMMENDATION 
+                            <span class="edge-alert">⚡ EDGE DETECTED</span>
+                        </div>
+                        {recommendation if recommendation else "Analyzing..."}
+                        <div class="bet-details">
+                            <span>Model: {pred['spread']:.1f} / {pred['total']:.1f}</span>
+                            <span class="confidence {conf_class}">Confidence: {conf:.0f}%</span>
+                        </div>
+                    </div>
+                    """
+                else:
+                    html += f"""
+                    <div class="odds-box" style="background: rgba(52, 73, 94, 0.3);">
+                        🤖 Model Analysis: Spread {pred['spread']:.1f} | Total {pred['total']:.1f}
+                        <span class="confidence {conf_class}" style="float: right;">Confidence: {conf:.0f}%</span>
+                    </div>
+                    """
+            else:
+                html += '<div class="no-edge">⏳ Analysis pending...</div>'
             
             html += "</div>"
         
