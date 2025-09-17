@@ -3,7 +3,7 @@ services:
     name: sports-betting-beta
     env: python
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python beta_platform.py"
+    startCommand: "python simple_beta.py"
     envVars:
       - key: ODDS_API_KEY
         value: "12ef8ff548ae7e9d3b7f7a6da8a0306d"
