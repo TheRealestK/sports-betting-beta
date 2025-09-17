@@ -2,8 +2,8 @@ services:
   - type: web
     name: sports-betting-beta
     env: python
-    buildCommand: "echo 'No dependencies needed'"
-    startCommand: "python ultra_simple.py"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python simple_beta.py"
     envVars:
       - key: PYTHON_VERSION
         value: "3.11"
