@@ -3,7 +3,7 @@ services:
     name: sports-betting-beta
     env: python
     buildCommand: "pip install requests"
-    startCommand: "python track1_enhanced.py"
+    startCommand: "python track1_render.py"
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.10"
